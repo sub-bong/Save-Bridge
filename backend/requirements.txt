@@ -1,0 +1,71 @@
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.2
+aiohttp-retry==2.9.1
+aiosignal==1.4.0
+altair==5.5.0
+annotated-types @ file:///opt/miniconda3/conda-bld/annotated-types_1761744940067/work
+anyio @ file:///opt/miniconda3/conda-bld/anyio_1758623411472/work
+async-timeout==5.0.1
+attrs==25.4.0
+blinker @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs_11lor_igbs/croot/blinker_1737449046432/work
+cachetools==6.2.2
+certifi @ file:///opt/miniconda3/conda-bld/certifi_1763135327670/work/certifi
+charset-normalizer==3.4.4
+click @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_2bwamfk1ra/croot/click_1754477943404/work
+distro @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_ddkyz0575y/croot/distro_1714488254309/work
+exceptiongroup @ file:///opt/miniconda3/conda-bld/exceptiongroup_1761560357548/work
+Flask @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs_c5fr3f66m2/croot/flask_1756453130186/work
+flask-cors==6.0.1
+frozenlist==1.8.0
+geographiclib==2.1
+geopy==2.4.1
+gitdb==4.0.12
+GitPython==3.1.45
+h11 @ file:///opt/miniconda3/conda-bld/h11_1761931258948/work
+httpcore @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_941yf7p5zt/croot/httpcore_1748526061031/work
+httpx @ file:///opt/miniconda3/conda-bld/httpx_1760447189111/work
+idna @ file:///opt/miniconda3/conda-bld/idna_1761912002779/work
+itsdangerous @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_00jdi1gu23/croot/itsdangerous_1716533346702/work
+Jinja2 @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs_2cnn4kenrm/croot/jinja2_1741710859444/work
+jiter @ file:///opt/miniconda3/conda-bld/jiter_1762897295847/work
+jsonschema==4.25.1
+jsonschema-specifications==2025.9.1
+MarkupSafe @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_1f_uj4vxik/croot/markupsafe_1738584045311/work
+multidict==6.7.0
+narwhals==2.12.0
+numpy==2.2.6
+openai @ file:///opt/miniconda3/conda-bld/openai_1759140185015/work
+packaging==25.0
+pandas==2.3.3
+pillow==12.0.0
+propcache==0.4.1
+protobuf==6.33.1
+pyarrow==21.0.0
+pydantic @ file:///opt/miniconda3/conda-bld/pydantic_1764083526775/work
+pydantic_core @ file:///opt/miniconda3/conda-bld/pydantic-core_1764009769251/work
+pydeck==0.9.1
+PyJWT==2.10.1
+pyproj==3.7.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.1
+pytz==2025.2
+referencing==0.37.0
+requests==2.32.5
+rpds-py==0.29.0
+six==1.17.0
+smmap==5.0.2
+sniffio @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_1573pknjrg/croot/sniffio_1705431298885/work
+streamlit==1.51.0
+streamlit-geolocation==0.0.10
+streamlit-js-eval==0.1.7
+tenacity==9.1.2
+toml==0.10.2
+tornado==6.5.2
+tqdm @ file:///opt/miniconda3/conda-bld/tqdm_1762863350713/work
+twilio==9.8.7
+typing-inspection @ file:///opt/miniconda3/conda-bld/typing-inspection_1760614169956/work
+typing_extensions @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs_dffmcwqo6o/croot/typing_extensions_1756281471323/work
+tzdata==2025.2
+urllib3==2.5.0
+Werkzeug @ file:///private/var/folders/k1/30mswbxs7r1g6zwn8y4fyt500000gp/T/abs_87am5fxnsf/croot/werkzeug_1737448721856/work
+yarl==1.22.0
