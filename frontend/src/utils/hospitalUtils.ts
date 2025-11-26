@@ -1,0 +1,210 @@
+import type { Hospital, SymptomRule } from "../types";
+import { SYMPTOM_RULES, facilityNames, bedNames } from "../constants";
+
+export const getRequiredFacilities = (symptomName: string): string[] => {
+  const rule = SYMPTOM_RULES[symptomName];
+  if (!rule) return [];
+  return rule.bool_any
+    .map(([key]) => facilityNames[key])
+    .filter((name): name is string => !!name);
+};
+
+export const getRequiredBeds = (symptomName: string): string[] => {
+  const rule = SYMPTOM_RULES[symptomName];
+  if (!rule) return [];
+  return rule.min_ge1
+    .map(([key]) => bedNames[key])
+    .filter((name): name is string => !!name);
+};
+
+export const getNiceToHaveBeds = (symptomName: string): string[] => {
+  const rule = SYMPTOM_RULES[symptomName];
+  if (!rule) return [];
+  return rule.nice_to_have
+    .map(([key]) => bedNames[key])
+    .filter((name): name is string => !!name);
+};
+
+export const formatBedValue = (value: string | number | undefined): string => {
+  if (!value || value === "없음" || value === "None" || value === "nan") return "없음";
+  if (typeof value === "string" && value.toUpperCase() === "Y") return "있음";
+  if (typeof value === "string" && value.toUpperCase() === "N") return "없음";
+  if (typeof value === "number") return `${value}개`;
+  return String(value);
+};
+
+export const formatHvidate = (value?: string): string => {
+  if (!value) return "업데이트 시간 정보 없음";
+  const digitsOnly = value.replace(/\D/g, "");
+  if (digitsOnly.length < 12) {
+    return value;
+  }
+  const year = digitsOnly.slice(0, 4);
+  const month = digitsOnly.slice(4, 6);
+  const day = digitsOnly.slice(6, 8);
+  const hour = digitsOnly.slice(8, 10);
+  const minute = digitsOnly.slice(10, 12);
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+};
+
+/**
+ * STT 텍스트에서 환자 연령 정보를 추출하여 성인/소아 판단
+ * @param sttText STT로 입력받은 텍스트
+ * @returns "adult" | "pediatric" | null (판단 불가능한 경우)
+ */
+export function detectPatientAgeGroup(sttText: string | null | undefined): "adult" | "pediatric" | null {
+  if (!sttText) return null;
+  
+  const text = sttText.toLowerCase();
+  
+  // 소아 관련 키워드 (우선순위 높음)
+  const pediatricKeywords = [
+    "생후", "신생아", "영아", "유아", "소아", "아동", "어린이",
+    "신생아실", "소아과", "소아청소년", "소아중환자",
+    "미숙아", "조산아", "신생아중환자",
+    "인큐베이터", "소아용", "소아기"
+  ];
+  
+  // 성인 관련 키워드
+  const adultKeywords = [
+    "성인", "성인 남성", "성인 여성", "남성", "여성",
+    "10대", "20대", "30대", "40대", "50대", "60대", "70대", "80대", "90대",
+    "청년", "중년", "장년", "노인", "고령"
+  ];
+  
+  // 소아 키워드 확인
+  for (const keyword of pediatricKeywords) {
+    if (text.includes(keyword)) {
+      return "pediatric";
+    }
+  }
+  
+  // 성인 키워드 확인
+  for (const keyword of adultKeywords) {
+    if (text.includes(keyword)) {
+      return "adult";
+    }
+  }
+  
+  // 숫자 + "세", "살", "개월" 패턴 확인
+  const agePatterns = [
+    /(\d+)\s*(?:세|살|년생)/g,
+    /생후\s*(\d+)\s*(?:주|개월|일)/g,
+    /(\d+)\s*(?:개월|주|일)\s*(?:된|된\s*영유아|된\s*아기)/g
+  ];
+  
+  for (const pattern of agePatterns) {
+    const matches = text.match(pattern);
+    if (matches) {
+      for (const match of matches) {
+        const ageMatch = match.match(/(\d+)/);
+        if (ageMatch) {
+          const age = parseInt(ageMatch[1]);
+          // 생후, 개월, 주, 일 단위는 소아로 판단
+          if (match.includes("생후") || match.includes("개월") || match.includes("주") || match.includes("일")) {
+            return "pediatric";
+          }
+          // 나이로 판단 (19세 이하는 소아로 간주, 다만 10대는 성인 키워드가 있으면 성인)
+          if (age <= 19) {
+            // "10대 소아" 같은 경우는 소아로 판단
+            if (match.includes("소아") || match.includes("아동")) {
+              return "pediatric";
+            }
+            // "10대 성인" 같은 경우는 성인으로 판단
+            if (match.includes("성인")) {
+              return "adult";
+            }
+            // 기본적으로 19세 이하는 소아로 판단
+            return "pediatric";
+          } else {
+            return "adult";
+          }
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * STT 텍스트에서 환자 나이 추출
+ * @param sttText STT로 입력받은 텍스트
+ * @returns 나이 숫자 또는 undefined
+ */
+export function extractPatientAge(sttText: string | null | undefined): number | undefined {
+  if (!sttText) return undefined;
+  
+  const text = sttText;
+  // "60대", "60세", "60살" 등의 패턴 찾기
+  const agePatterns = [
+    /(\d+)\s*(?:세|살|년생)/,
+    /(\d+)\s*대/,
+  ];
+  
+  for (const pattern of agePatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const age = parseInt(match[1]);
+      if (age > 0 && age < 150) {
+        return age;
+      }
+    }
+  }
+  
+  return undefined;
+}
+
+/**
+ * STT 텍스트에서 환자 성별 추출
+ * @param sttText STT로 입력받은 텍스트
+ * @returns "M" (남성) | "F" (여성) | undefined
+ */
+export function extractPatientSex(sttText: string | null | undefined): "M" | "F" | undefined {
+  if (!sttText) return undefined;
+  
+  const text = sttText.toLowerCase();
+  
+  // 남성 키워드
+  if (text.includes("남성") || text.includes("남자") || text.includes("male") || text.includes("m/")) {
+    return "M";
+  }
+  
+  // 여성 키워드
+  if (text.includes("여성") || text.includes("여자") || text.includes("female") || text.includes("f/")) {
+    return "F";
+  }
+  
+  return undefined;
+}
+
+/**
+ * STT 텍스트에서 Pre-KTAS 레벨 추출
+ * @param sttText STT로 입력받은 텍스트
+ * @returns Pre-KTAS 레벨 (1-5) 또는 undefined
+ */
+export function extractPreKtasLevel(sttText: string | null | undefined): number | undefined {
+  if (!sttText) return undefined;
+  
+  const text = sttText.toLowerCase();
+  
+  // "Pre-KTAS 2점", "pre-ktas 2", "2점 분류" 등의 패턴
+  const patterns = [
+    /pre-ktas\s*(\d+)/i,
+    /ktas\s*(\d+)/i,
+    /(\d+)\s*점\s*분류/,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const level = parseInt(match[1]);
+      if (level >= 1 && level <= 5) {
+        return level;
+      }
+    }
+  }
+  
+  return undefined;
+}
+

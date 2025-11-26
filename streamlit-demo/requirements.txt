@@ -1,0 +1,13 @@
+streamlit>=1.28.0
+pandas
+requests
+geopy
+pydeck
+openai
+twilio
+flask
+flask-cors
+pyproj
+streamlit-js-eval
+streamlit-geolocation
+
