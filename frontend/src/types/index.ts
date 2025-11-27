@@ -61,6 +61,8 @@ export interface CriticalPreset {
   id: string;
   label: string;
   english?: string;
+  preKtasLevel?: string;
+  preKtasEvidence?: string;
 }
 
 export type InputMode = "stt" | "critical";

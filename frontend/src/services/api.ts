@@ -189,7 +189,7 @@ export const makeCall = async (
 };
 
 // 전화 응답 확인
-export const getCallResponse = async (callSid: string): Promise<{ digit?: string } | null> => {
+export const getCallResponse = async (callSid: string): Promise<{ digit?: string; status?: string } | null> => {
   try {
     const res = await axios.get(`${API_BASE_URL}/api/telephony/response/${callSid}`);
     return res.data || null;

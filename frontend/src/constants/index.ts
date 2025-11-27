@@ -2,6 +2,7 @@ export const symptomOptions: string[] = [
   "뇌졸중 의심(FAST+)",
   "심근경색 의심(STEMI)",
   "다발성 외상/중증 외상",
+  "심정지/심폐정지",
   "성인 호흡곤란",
   "소아 호흡곤란",
   "성인 경련",
@@ -60,6 +61,11 @@ export const SYMPTOM_RULES: Record<string, import("../types").SymptomRule> = {
   "소아 중증(신생아/영아)": {
     bool_any: [["hv10", "Y"], ["hv11", "Y"]],
     min_ge1: [["hvncc", 1]],
+    nice_to_have: [],
+  },
+  "심정지/심폐정지": {
+    bool_any: [],
+    min_ge1: [],
     nice_to_have: [],
   },
 };
