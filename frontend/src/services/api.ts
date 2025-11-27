@@ -208,7 +208,7 @@ export const getRoute = async (
   originLon: number,
   destLat: number,
   destLon: number
-): Promise<{ path_coords?: number[][] } | null> => {
+): Promise<{ path_coords?: number[][]; distance_km?: number; eta_minutes?: number } | null> => {
   try {
     const res = await axios.get(`${API_BASE_URL}/api/geo/route`, {
       params: {

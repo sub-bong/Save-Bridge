@@ -48,6 +48,7 @@ export const SafeBridgeApp: React.FC = () => {
   const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
   const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<{ team_id: number; ems_id: string; region: string | null } | null>(null);
+  const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -59,18 +60,32 @@ export const SafeBridgeApp: React.FC = () => {
   // 사용자 정보 로드
   useEffect(() => {
     const loadUser = async () => {
-      const user = await getCurrentUser();
-      setCurrentUser(user);
+      try {
+        const user = await getCurrentUser();
+        setCurrentUser(user);
+      } catch (error) {
+        console.error("사용자 정보 로드 실패:", error);
+        // 에러가 발생해도 컴포넌트는 계속 렌더링되도록 함
+        setCurrentUser(null);
+      }
     };
     loadUser();
   }, []);
 
-  // 로그아웃 핸들러
-  const handleLogout = async () => {
-    if (window.confirm("로그아웃하시겠습니까?")) {
-      await logout();
-      window.location.reload(); // 페이지 새로고침하여 로그인 페이지로 이동
-    }
+  // 로그아웃 모달 열기
+  const handleLogoutClick = () => {
+    setShowLogoutModal(true);
+  };
+
+  // 로그아웃 확인
+  const handleLogoutConfirm = async () => {
+    await logout();
+    window.location.reload(); // 페이지 새로고침하여 로그인 페이지로 이동
+  };
+
+  // 로그아웃 취소
+  const handleLogoutCancel = () => {
+    setShowLogoutModal(false);
   };
   const hospitalColorPalette = useMemo(
     () => ["#ef4444", "#f97316", "#f59e0b", "#14b8a6", "#0ea5e9", "#6366f1", "#a855f7", "#ec4899", "#22c55e", "#e11d48", "#10b981", "#94a3b8"],
@@ -881,7 +896,7 @@ export const SafeBridgeApp: React.FC = () => {
               </div>
             )}
             <button
-              onClick={handleLogout}
+              onClick={handleLogoutClick}
               className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
               title="로그아웃"
             >
@@ -1083,6 +1098,40 @@ export const SafeBridgeApp: React.FC = () => {
             }
           }}
         />
+      )}
+
+      {/* 로그아웃 확인 모달 */}
+      {showLogoutModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={handleLogoutCancel}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              로그아웃
+            </h3>
+            <p className="text-gray-600 mb-6">
+              로그아웃하시겠습니까?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleLogoutCancel}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleLogoutConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
