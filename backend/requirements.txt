@@ -16,6 +16,7 @@ distro
 exceptiongroup
 Flask
 flask-cors==6.0.1
+flask-sqlalchemy==3.1.1
 frozenlist==1.8.0
 geographiclib==2.1
 geopy==2.4.1

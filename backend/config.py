@@ -86,3 +86,8 @@ PROVINCE_INCLUDE_METROS: dict = {
 FLASK_PORT = 5001
 CORS_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
 
+# 데이터베이스 설정
+# SQLite 데이터베이스 파일 경로 (프로젝트 루트 디렉토리에 'site.db'로 저장)
+# DBeaver 연결 시 이 경로를 사용하세요
+DATABASE_URI = os.getenv("DATABASE_URI", "sqlite:///site.db")
+
