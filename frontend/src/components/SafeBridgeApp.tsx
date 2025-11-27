@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { Coords, Region, Hospital, ApprovalStatus, HospitalHandoverSummary, PatientTransportMeta } from "../types";
 import { symptomOptions } from "../constants";
-import { addressToCoord, coordToAddress, coordToRegion, searchHospitals, transcribeAudio, makeCall, getCallResponse, getRoute } from "../services/api";
+import { addressToCoord, coordToAddress, coordToRegion, searchHospitals, transcribeAudio, makeCall, getCallResponse, getRoute, logout, getCurrentUser } from "../services/api";
 import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel } from "../utils/hospitalUtils";
 import { LocationInput } from "./LocationInput";
 import { PatientStatusInput, CRITICAL_PRESETS } from "./PatientStatusInput";
@@ -47,6 +47,7 @@ export const SafeBridgeApp: React.FC = () => {
   const [chatSession, setChatSession] = useState<HospitalHandoverSummary | null>(null);
   const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
   const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ team_id: number; ems_id: string; region: string | null } | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -54,6 +55,23 @@ export const SafeBridgeApp: React.FC = () => {
   const levelAnimationRef = useRef<number | null>(null);
   const callTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const colorMapRef = useRef<Record<string, string>>({});
+
+  // 사용자 정보 로드
+  useEffect(() => {
+    const loadUser = async () => {
+      const user = await getCurrentUser();
+      setCurrentUser(user);
+    };
+    loadUser();
+  }, []);
+
+  // 로그아웃 핸들러
+  const handleLogout = async () => {
+    if (window.confirm("로그아웃하시겠습니까?")) {
+      await logout();
+      window.location.reload(); // 페이지 새로고침하여 로그인 페이지로 이동
+    }
+  };
   const hospitalColorPalette = useMemo(
     () => ["#ef4444", "#f97316", "#f59e0b", "#14b8a6", "#0ea5e9", "#6366f1", "#a855f7", "#ec4899", "#22c55e", "#e11d48", "#10b981", "#94a3b8"],
     []
@@ -853,8 +871,25 @@ export const SafeBridgeApp: React.FC = () => {
               Pre-KTAS 기반 환자 상태 요약과 인근 응급의료기관 추천을 위한 태블릿 전용 화면입니다.
             </p>
           </div>
-          <div className="text-right text-[10px] md:text-[11px] text-slate-400 leading-snug">
-            <div>Mock UI · 실제 환자 이송에 사용 금지</div>
+          <div className="flex items-center gap-4">
+            {currentUser && (
+              <div className="text-right text-[10px] md:text-[11px] text-slate-600">
+                <div className="font-semibold">{currentUser.ems_id}</div>
+                {currentUser.region && (
+                  <div className="text-slate-400">{currentUser.region}</div>
+                )}
+              </div>
+            )}
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
+              title="로그아웃"
+            >
+              로그아웃
+            </button>
+            <div className="text-right text-[10px] md:text-[11px] text-slate-400 leading-snug">
+              <div>Mock UI · 실제 환자 이송에 사용 금지</div>
+            </div>
           </div>
         </div>
       </header>
