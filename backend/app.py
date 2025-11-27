@@ -5,7 +5,7 @@ Twilio Callback Flask Server
 Twilio의 Gather 콜백을 받기 위한 Flask 서버
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client as TwilioClient
@@ -36,9 +36,13 @@ from config import (
 # SQLAlchemy 모델 import
 from models import db, EMSTeam, Hospital, EmergencyRequest, RequestAssignment, ChatSession, ChatMessage
 
+# 비밀번호 유틸리티 import
+from utils.password import verify_password
+
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
 # CORS 설정: React 앱에서 접근 가능하도록
-CORS(app, origins=CORS_ORIGINS)
+CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
 
 # SQLAlchemy 설정
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URI
@@ -883,6 +887,17 @@ def api_stt_transcribe():
             timestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fh.write(f"[{timestr}] {translated_text}\n")
         
+        # STT 결과를 DB에 저장 (request_id가 제공된 경우)
+        request_id = request.form.get('request_id', type=int) or (request.get_json() or {}).get('request_id')
+        if request_id:
+            try:
+                emergency_request = EmergencyRequest.query.get(request_id)
+                if emergency_request:
+                    emergency_request.stt_full_text = translated_text
+                    db.session.commit()
+            except Exception as e:
+                print(f"STT 결과 DB 저장 오류: {e}")
+        
         # 임시 파일 삭제
         os.remove(tmp_file_path)
         
@@ -946,7 +961,7 @@ def api_telephony_call():
         }
         print(f" [Mock Call] {hospital_name} ({normalized_to}) 대상 호출. call_sid={call_sid}")
     
-    # 초기 상태 저장 (Twilio 콜백에서 digit 업데이트)
+    # 초기 상태 저장 (Twilio 콜백에서 digit 업데이트) - 메모리 (하위 호환성)
     call_metadata[call_sid] = {
         "patient_info": patient_info or "",
         "hospital_name": hospital_name,
@@ -959,6 +974,23 @@ def api_telephony_call():
         "patient_info": patient_info or "",
         "status": "initiated"
     }
+    
+    # DB에 저장: assignment_id가 제공된 경우 RequestAssignment 업데이트
+    assignment_id = data.get('assignment_id', type=int)
+    if assignment_id:
+        try:
+            assignment = RequestAssignment.query.get(assignment_id)
+            if assignment:
+                assignment.twillio_sid = call_sid
+                from datetime import datetime
+                assignment.called_at = datetime.now()
+                db.session.commit()
+                print(f" RequestAssignment {assignment_id}에 Call SID {call_sid} 저장됨")
+        except Exception as e:
+            db.session.rollback()
+            import traceback
+            print(f" DB 저장 오류: {traceback.format_exc()}")
+    
     return jsonify({"call_sid": call_sid}), 200
 
 @app.route('/api/telephony/response/<call_sid>', methods=['GET'])
@@ -1488,6 +1520,271 @@ def api_update_response():
         print(f"응답 상태 업데이트 오류: {error_detail}")
         return jsonify({"error": f"응답 상태 업데이트 중 오류가 발생했습니다: {str(e)}"}), 500
 
+# 인증 관련 API
+@app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
+def api_login():
+    """EMS 팀 로그인"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    try:
+        data = request.get_json()
+        ems_id = data.get('ems_id')
+        password = data.get('password')
+        
+        if not ems_id or not password:
+            return jsonify({"error": "ems_id와 password가 필요합니다."}), 400
+        
+        # DB에서 EMS 팀 조회
+        team = EMSTeam.query.filter_by(ems_id=ems_id).first()
+        if not team:
+            return jsonify({"error": "존재하지 않는 EMS ID입니다."}), 401
+        
+        # 비밀번호 검증
+        if not verify_password(password, team.password):
+            return jsonify({"error": "비밀번호가 일치하지 않습니다."}), 401
+        
+        # 세션에 로그인 정보 저장
+        session['team_id'] = team.team_id
+        session['ems_id'] = team.ems_id
+        session['logged_in'] = True
+        
+        return jsonify({
+            "team_id": team.team_id,
+            "ems_id": team.ems_id,
+            "region": team.region,
+            "message": "로그인 성공"
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"로그인 오류: {error_detail}")
+        return jsonify({"error": f"로그인 중 오류가 발생했습니다: {str(e)}"}), 500
+
+@app.route('/api/auth/logout', methods=['POST', 'OPTIONS'])
+def api_logout():
+    """로그아웃"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    session.clear()
+    return jsonify({"message": "로그아웃되었습니다."}), 200
+
+@app.route('/api/auth/me', methods=['GET'])
+def api_get_current_user():
+    """현재 로그인한 사용자 정보 조회"""
+    if not session.get('logged_in'):
+        return jsonify({"error": "로그인이 필요합니다."}), 401
+    
+    team_id = session.get('team_id')
+    if not team_id:
+        return jsonify({"error": "세션 정보가 없습니다."}), 401
+    
+    team = EMSTeam.query.get(team_id)
+    if not team:
+        session.clear()
+        return jsonify({"error": "사용자를 찾을 수 없습니다."}), 404
+    
+    return jsonify({
+        "team_id": team.team_id,
+        "ems_id": team.ems_id,
+        "region": team.region
+    }), 200
+
+def require_login():
+    """로그인 필수 데코레이터 대신 사용하는 헬퍼 함수"""
+    if not session.get('logged_in'):
+        return jsonify({"error": "로그인이 필요합니다."}), 401
+    return None
+
+# 응급 요청 조회 API
+@app.route('/api/emergency/requests', methods=['GET'])
+def api_get_emergency_requests():
+    """응급 요청 목록 조회"""
+    try:
+        team_id = request.args.get('team_id', type=int)
+        request_id = request.args.get('request_id', type=int)
+        
+        if request_id:
+            # 특정 요청 조회
+            emergency_request = EmergencyRequest.query.get(request_id)
+            if not emergency_request:
+                return jsonify({"error": "응급 요청을 찾을 수 없습니다."}), 404
+            
+            return jsonify({
+                "request_id": emergency_request.request_id,
+                "team_id": emergency_request.team_id,
+                "patient_sex": emergency_request.patient_sex,
+                "patient_age": emergency_request.patient_age,
+                "pre_ktas_class": emergency_request.pre_ktas_class,
+                "stt_full_text": emergency_request.stt_full_text,
+                "rag_summary": emergency_request.rag_summary,
+                "current_lat": emergency_request.current_lat,
+                "current_lon": emergency_request.current_lon,
+                "is_completed": emergency_request.is_completed,
+                "requested_at": emergency_request.requested_at.isoformat() if emergency_request.requested_at else None
+            }), 200
+        
+        # 목록 조회
+        query = EmergencyRequest.query
+        if team_id:
+            query = query.filter_by(team_id=team_id)
+        
+        requests = query.order_by(EmergencyRequest.requested_at.desc()).limit(100).all()
+        
+        return jsonify({
+            "requests": [{
+                "request_id": req.request_id,
+                "team_id": req.team_id,
+                "patient_sex": req.patient_sex,
+                "patient_age": req.patient_age,
+                "pre_ktas_class": req.pre_ktas_class,
+                "stt_full_text": req.stt_full_text,
+                "rag_summary": req.rag_summary,
+                "current_lat": req.current_lat,
+                "current_lon": req.current_lon,
+                "is_completed": req.is_completed,
+                "requested_at": req.requested_at.isoformat() if req.requested_at else None
+            } for req in requests]
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"응급 요청 조회 오류: {error_detail}")
+        return jsonify({"error": f"응급 요청 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+
+# RequestAssignment 조회 API
+@app.route('/api/emergency/assignments', methods=['GET'])
+def api_get_assignments():
+    """RequestAssignment 목록 조회"""
+    try:
+        request_id = request.args.get('request_id', type=int)
+        assignment_id = request.args.get('assignment_id', type=int)
+        hospital_id = request.args.get('hospital_id')
+        
+        if assignment_id:
+            # 특정 assignment 조회
+            assignment = RequestAssignment.query.get(assignment_id)
+            if not assignment:
+                return jsonify({"error": "RequestAssignment를 찾을 수 없습니다."}), 404
+            
+            return jsonify({
+                "assignment_id": assignment.assignment_id,
+                "request_id": assignment.request_id,
+                "hospital_id": assignment.hospital_id,
+                "twillio_sid": assignment.twillio_sid,
+                "response_status": assignment.response_status,
+                "distance_km": assignment.distance_km,
+                "eta_min": assignment.eta_min,
+                "responded_at": assignment.responded_at.isoformat() if assignment.responded_at else None,
+                "called_at": assignment.called_at.isoformat() if assignment.called_at else None
+            }), 200
+        
+        # 목록 조회
+        query = RequestAssignment.query
+        if request_id:
+            query = query.filter_by(request_id=request_id)
+        if hospital_id:
+            query = query.filter_by(hospital_id=hospital_id)
+        
+        assignments = query.order_by(RequestAssignment.called_at.desc()).limit(100).all()
+        
+        return jsonify({
+            "assignments": [{
+                "assignment_id": a.assignment_id,
+                "request_id": a.request_id,
+                "hospital_id": a.hospital_id,
+                "twillio_sid": a.twillio_sid,
+                "response_status": a.response_status,
+                "distance_km": a.distance_km,
+                "eta_min": a.eta_min,
+                "responded_at": a.responded_at.isoformat() if a.responded_at else None,
+                "called_at": a.called_at.isoformat() if a.called_at else None
+            } for a in assignments]
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"RequestAssignment 조회 오류: {error_detail}")
+        return jsonify({"error": f"RequestAssignment 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+
+# 채팅 메시지 API
+@app.route('/api/chat/messages', methods=['GET', 'POST'])
+def api_chat_messages():
+    """채팅 메시지 조회(GET) 또는 생성(POST)"""
+    try:
+        if request.method == 'GET':
+            # 메시지 조회
+            session_id = request.args.get('session_id', type=int)
+            if not session_id:
+                return jsonify({"error": "session_id 파라미터가 필요합니다."}), 400
+            
+            messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.sent_at).all()
+            
+            return jsonify({
+                "messages": [{
+                    "message_id": msg.message_id,
+                    "session_id": msg.session_id,
+                    "sender_type": msg.sender_type,
+                    "sender_ref_id": msg.sender_ref_id,
+                    "content": msg.content,
+                    "image_path": msg.image_path,
+                    "image_url": f"/uploads/images/{Path(msg.image_path).name}" if msg.image_path else None,
+                    "sent_at": msg.sent_at.isoformat() if msg.sent_at else None
+                } for msg in messages]
+            }), 200
+        
+        else:  # POST
+            # 메시지 생성
+            data = request.get_json()
+            session_id = data.get('session_id')
+            sender_type = data.get('sender_type')  # 'EMS' or 'HOSPITAL'
+            sender_ref_id = data.get('sender_ref_id')
+            content = data.get('content', '')
+            image_path = data.get('image_path')  # 이미 업로드된 이미지 경로
+            
+            if not session_id or not sender_type or not sender_ref_id:
+                return jsonify({"error": "session_id, sender_type, sender_ref_id가 필요합니다."}), 400
+            
+            # 세션 존재 확인
+            session = ChatSession.query.get(session_id)
+            if not session:
+                return jsonify({"error": "채팅 세션을 찾을 수 없습니다."}), 404
+            
+            # 메시지 생성
+            new_message = ChatMessage(
+                session_id=session_id,
+                sender_type=sender_type,
+                sender_ref_id=str(sender_ref_id),
+                content=content,
+                image_path=image_path
+            )
+            
+            db.session.add(new_message)
+            db.session.commit()
+            
+            return jsonify({
+                "message_id": new_message.message_id,
+                "session_id": new_message.session_id,
+                "sender_type": new_message.sender_type,
+                "sender_ref_id": new_message.sender_ref_id,
+                "content": new_message.content,
+                "image_path": new_message.image_path,
+                "image_url": f"/uploads/images/{Path(new_message.image_path).name}" if new_message.image_path else None,
+                "sent_at": new_message.sent_at.isoformat() if new_message.sent_at else None
+            }), 201
+            
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"채팅 메시지 오류: {error_detail}")
+        return jsonify({"error": f"채팅 메시지 처리 중 오류가 발생했습니다: {str(e)}"}), 500
+
 @app.route('/')
 def index():
     """서버 상태 확인"""
@@ -1509,6 +1806,15 @@ def index():
             <li><code>/api/geo/address2coord</code> - 주소 → 좌표 변환</li>
             <li><code>/api/stt/transcribe</code> - 음성 → 텍스트 변환 (STT)</li>
             <li><code>/api/hospitals/top3</code> - 병원 Top3 조회</li>
+            <li><code>/api/auth/login</code> - EMS 팀 로그인</li>
+            <li><code>/api/auth/logout</code> - 로그아웃</li>
+            <li><code>/api/auth/me</code> - 현재 로그인한 사용자 정보</li>
+            <li><code>/api/emergency/request</code> - 응급실 입실 요청 생성</li>
+            <li><code>/api/emergency/requests</code> - 응급 요청 목록 조회</li>
+            <li><code>/api/emergency/call-hospital</code> - 병원에 전화 걸기</li>
+            <li><code>/api/emergency/assignments</code> - RequestAssignment 목록 조회</li>
+            <li><code>/api/emergency/update-response</code> - 병원 응답 상태 업데이트</li>
+            <li><code>/api/chat/messages</code> - 채팅 메시지 조회/생성</li>
         </ul>
         <hr>
         <p><b>ngrok 사용법:</b></p>
@@ -1547,7 +1853,7 @@ def twilio_gather_callback():
         gather.say("해당 환자 수용이 가능하시면 1번, 수용이 불가능하시면 2번을 눌러주세요.", language="ko-KR", voice="Polly.Seoyeon")
         return str(response), 200, {'Content-Type': 'text/xml'}
     
-    # 입력값 저장
+    # 입력값 저장 (메모리 - 하위 호환성)
     record = call_responses.setdefault(call_sid, {})
     record.update({
         "digit": digits,
@@ -1555,15 +1861,45 @@ def twilio_gather_callback():
         "patient_info": patient_info
     })
     
+    # DB에 저장: RequestAssignment 업데이트
+    try:
+        assignment = RequestAssignment.query.filter_by(twillio_sid=call_sid).first()
+        if assignment:
+            from datetime import datetime
+            if digits == "1":
+                assignment.response_status = "승인"
+                assignment.responded_at = datetime.now()
+                # 승인된 경우 ChatSession 생성
+                existing_session = ChatSession.query.filter_by(request_id=assignment.request_id).first()
+                if not existing_session:
+                    chat_session = ChatSession(
+                        request_id=assignment.request_id,
+                        assignment_id=assignment.assignment_id,
+                        started_at=datetime.now()
+                    )
+                    db.session.add(chat_session)
+                print(" 1번 입력 - 입실 승인 (DB 저장됨)")
+            elif digits == "2":
+                assignment.response_status = "거절"
+                assignment.responded_at = datetime.now()
+                print(" 2번 입력 - 입실 거절 (DB 저장됨)")
+            else:
+                print(f" 잘못된 입력: {digits}")
+            
+            db.session.commit()
+        else:
+            print(f" Warning: Call SID {call_sid}에 해당하는 RequestAssignment를 찾을 수 없습니다.")
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        print(f" DB 저장 오류: {traceback.format_exc()}")
+    
     if digits == "1":
         response.say("입실 승인 확인되었습니다. 감사합니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print(" 1번 입력 - 입실 승인")
     elif digits == "2":
         response.say("입실 불가 확인되었습니다. 다른 병원을 찾겠습니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print(" 2번 입력 - 입실 거절")
     else:
         response.say("잘못된 입력입니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print(f" 잘못된 입력: {digits}")
     
     return str(response), 200, {'Content-Type': 'text/xml'}
 
@@ -1574,8 +1910,13 @@ def twilio_status_callback():
     call_status = request.form.get('CallStatus', '')
     
     print(f"\n [통화 상태] Call SID: {call_sid}, Status: {call_status}")
+    
+    # 메모리에 저장 (하위 호환성)
     record = call_responses.setdefault(call_sid, {})
     record['status'] = call_status or record.get('status')
+    
+    # DB에 저장: RequestAssignment의 twillio_sid로 찾아서 상태 업데이트 (필요시)
+    # 현재는 상태만 로깅하고, 필요하면 추가 필드에 저장 가능
     
     return "", 200
 
@@ -1608,16 +1949,71 @@ def get_responses():
 
 @app.route('/api/responses', methods=['GET'])
 def get_responses_json():
-    """저장된 응답을 JSON으로 반환 (Streamlit 앱용)"""
-    return call_responses, 200
+    """저장된 응답을 JSON으로 반환 (DB에서 조회)"""
+    try:
+        # DB에서 모든 RequestAssignment 조회
+        assignments = RequestAssignment.query.filter(
+            RequestAssignment.twillio_sid.isnot(None)
+        ).all()
+        
+        result = {}
+        for assignment in assignments:
+            if assignment.twillio_sid:
+                result[assignment.twillio_sid] = {
+                    "assignment_id": assignment.assignment_id,
+                    "request_id": assignment.request_id,
+                    "hospital_id": assignment.hospital_id,
+                    "response_status": assignment.response_status,
+                    "digit": "1" if assignment.response_status == "승인" else "2" if assignment.response_status == "거절" else None,
+                    "responded_at": assignment.responded_at.isoformat() if assignment.responded_at else None,
+                    "called_at": assignment.called_at.isoformat() if assignment.called_at else None,
+                    "distance_km": assignment.distance_km,
+                    "eta_min": assignment.eta_min
+                }
+        
+        # 메모리 데이터도 병합 (하위 호환성)
+        for call_sid, data in call_responses.items():
+            if call_sid not in result:
+                result[call_sid] = data
+        
+        return jsonify(result), 200
+    except Exception as e:
+        import traceback
+        print(f"응답 조회 오류: {traceback.format_exc()}")
+        # 오류 시 메모리 데이터 반환 (하위 호환성)
+        return jsonify(call_responses), 200
 
 @app.route('/api/response/<call_sid>', methods=['GET'])
 def get_response_by_sid(call_sid):
-    """특정 Call SID의 응답 확인"""
-    if call_sid in call_responses:
-        return call_responses[call_sid], 200
-    else:
-        return {"error": "Not found"}, 404
+    """특정 Call SID의 응답 확인 (DB에서 조회)"""
+    try:
+        # DB에서 조회
+        assignment = RequestAssignment.query.filter_by(twillio_sid=call_sid).first()
+        if assignment:
+            return jsonify({
+                "assignment_id": assignment.assignment_id,
+                "request_id": assignment.request_id,
+                "hospital_id": assignment.hospital_id,
+                "response_status": assignment.response_status,
+                "digit": "1" if assignment.response_status == "승인" else "2" if assignment.response_status == "거절" else None,
+                "responded_at": assignment.responded_at.isoformat() if assignment.responded_at else None,
+                "called_at": assignment.called_at.isoformat() if assignment.called_at else None,
+                "distance_km": assignment.distance_km,
+                "eta_min": assignment.eta_min
+            }), 200
+        
+        # 메모리에서 조회 (하위 호환성)
+        if call_sid in call_responses:
+            return jsonify(call_responses[call_sid]), 200
+        
+        return jsonify({"error": "Not found"}), 404
+    except Exception as e:
+        import traceback
+        print(f"응답 조회 오류: {traceback.format_exc()}")
+        # 오류 시 메모리 데이터 반환 (하위 호환성)
+        if call_sid in call_responses:
+            return jsonify(call_responses[call_sid]), 200
+        return jsonify({"error": "Not found"}), 404
 
 @app.route('/clear', methods=['GET', 'POST'])
 def clear_responses():

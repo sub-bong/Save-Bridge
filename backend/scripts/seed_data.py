@@ -33,7 +33,7 @@ def seed_ems_teams():
         {
             "ems_id": "ems_003",
             "password": "password123",
-            "region": "부산광역시"
+            "region": "광주광역시"
         },
     ]
     
