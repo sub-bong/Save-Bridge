@@ -9,6 +9,8 @@ interface MapDisplayProps {
   routePaths: Record<string, number[][]>;
   approvedHospital: Hospital | null;
   resolveHospitalColor: (hospital: Hospital, index: number) => string;
+  compact?: boolean;
+  compactHeightClass?: string;
 }
 
 export const MapDisplay: React.FC<MapDisplayProps> = ({
@@ -17,6 +19,8 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
   routePaths,
   approvedHospital,
   resolveHospitalColor,
+  compact = false,
+  compactHeightClass,
 }) => {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -103,6 +107,18 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
 
   if (!coords.lat || !coords.lon || hospitals.length === 0) {
     return null;
+  }
+
+  if (compact) {
+    return (
+      <div className="w-full h-full">
+        <div
+          ref={mapContainerRef}
+          className={`w-full ${compactHeightClass || "h-[260px]"} rounded-lg overflow-hidden border border-gray-200`}
+          style={{ zIndex: 0 }}
+        />
+      </div>
+    );
   }
 
   return (
