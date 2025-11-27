@@ -4,7 +4,7 @@ import { symptomOptions } from "../constants";
 import { addressToCoord, coordToAddress, coordToRegion, searchHospitals, transcribeAudio, makeCall, getCallResponse, getRoute } from "../services/api";
 import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel } from "../utils/hospitalUtils";
 import { LocationInput } from "./LocationInput";
-import { PatientStatusInput } from "./PatientStatusInput";
+import { PatientStatusInput, CRITICAL_PRESETS } from "./PatientStatusInput";
 import { HospitalSearchButtons } from "./SymptomSelector";
 import { HospitalPrioritySelector } from "./HospitalPrioritySelector";
 import type { PriorityMode } from "./HospitalPrioritySelector";
@@ -34,6 +34,7 @@ export const SafeBridgeApp: React.FC = () => {
   const [rerollCount, setRerollCount] = useState<number>(0);
   const [twilioAutoCalling, setTwilioAutoCalling] = useState<boolean>(false);
   const [currentHospitalIndex, setCurrentHospitalIndex] = useState<number>(0);
+  const [showHospitalPanel, setShowHospitalPanel] = useState<boolean>(false);
   const [activeCalls, setActiveCalls] = useState<Record<string, { call_sid: string; start_time: number }>>({});
   const [routePaths, setRoutePaths] = useState<Record<string, number[][]>>({});
   const [backupHospitals, setBackupHospitals] = useState<Hospital[]>([]);
@@ -41,10 +42,17 @@ export const SafeBridgeApp: React.FC = () => {
   const [hasExhaustedHospitals, setHasExhaustedHospitals] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordingError, setRecordingError] = useState<string>("");
+  const [micLevel, setMicLevel] = useState<number>(0);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [chatSession, setChatSession] = useState<HospitalHandoverSummary | null>(null);
+  const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
+  const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const levelAnimationRef = useRef<number | null>(null);
+  const callTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const colorMapRef = useRef<Record<string, string>>({});
   const hospitalColorPalette = useMemo(
     () => ["#ef4444", "#f97316", "#f59e0b", "#14b8a6", "#0ea5e9", "#6366f1", "#a855f7", "#ec4899", "#22c55e", "#e11d48", "#10b981", "#94a3b8"],
@@ -63,6 +71,7 @@ export const SafeBridgeApp: React.FC = () => {
       "뇌졸중 의심(FAST+)",
       "심근경색 의심(STEMI)",
       "다발성 외상/중증 외상",
+      "심정지/심폐정지",
       "정형외과 중증(대형골절/절단)",
       "신경외과 응급(의식저하/외상성출혈)",
     ];
@@ -299,6 +308,7 @@ export const SafeBridgeApp: React.FC = () => {
     }
     
     try {
+      setShowHospitalPanel(true);
       setLoadingHospitals(true);
       setRerollCount((prev) => prev + 1);
       setHospitalApprovalStatus({});
@@ -350,8 +360,13 @@ export const SafeBridgeApp: React.FC = () => {
       
       if (result.route_paths) {
         setRoutePaths(result.route_paths);
+      }
+      await fetchRoutePaths(uniqueHospitals, { updateDistances: true });
+
+      if (uniqueHospitals.length > 0) {
+        setTwilioAutoCalling(true);
       } else {
-        await fetchRoutePaths(fetchedHospitals);
+        setTwilioAutoCalling(false);
       }
     } catch (error: any) {
       console.error("병원 조회 오류:", error);
@@ -362,10 +377,17 @@ export const SafeBridgeApp: React.FC = () => {
   };
 
   const fetchRoutePaths = useCallback(
-    async (targetHospitals: Hospital[], options?: { append?: boolean }) => {
+    async (
+      targetHospitals: Hospital[],
+      options?: { append?: boolean; updateDistances?: boolean }
+    ) => {
       if (!coords.lat || !coords.lon || !targetHospitals?.length) return;
       
       const paths: Record<string, number[][]> = {};
+      const meta: Record<
+        string,
+        { distance_km?: number; eta_minutes?: number }
+      > = {};
       for (const hospital of targetHospitals) {
         if (hospital.wgs84Lat && hospital.wgs84Lon) {
           try {
@@ -378,12 +400,33 @@ export const SafeBridgeApp: React.FC = () => {
             if (result?.path_coords) {
               paths[hospital.hpid || ""] = result.path_coords;
             }
+            if (result) {
+              meta[hospital.hpid || ""] = {
+                distance_km: result.distance_km,
+                eta_minutes: result.eta_minutes,
+              };
+            }
           } catch (e) {
             console.error("경로 조회 실패:", e);
           }
         }
       }
       setRoutePaths((prev) => (options?.append ? { ...prev, ...paths } : paths));
+      if (options?.updateDistances && Object.keys(meta).length > 0) {
+        setHospitals((prev) =>
+          prev.map((h) => {
+            const key = h.hpid || "";
+            if (meta[key]) {
+              return {
+                ...h,
+                distance_km: meta[key].distance_km ?? h.distance_km,
+                eta_minutes: meta[key].eta_minutes ?? h.eta_minutes,
+              };
+            }
+            return h;
+          })
+        );
+      }
     },
     [coords.lat, coords.lon]
   );
@@ -391,7 +434,7 @@ export const SafeBridgeApp: React.FC = () => {
   useEffect(() => {
     if (!approvedHospital || !approvedHospital.hpid) return;
     if (routePaths[approvedHospital.hpid]) return;
-    fetchRoutePaths([approvedHospital], { append: true });
+    fetchRoutePaths([approvedHospital], { append: true, updateDistances: true });
   }, [approvedHospital, routePaths, fetchRoutePaths]);
 
   const handleAudioFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -417,6 +460,19 @@ export const SafeBridgeApp: React.FC = () => {
       alert(error.message || "음성 인식 중 오류가 발생했습니다.");
     }
   };
+
+  const cleanupAudioVisualization = useCallback(() => {
+    if (levelAnimationRef.current) {
+      cancelAnimationFrame(levelAnimationRef.current);
+      levelAnimationRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    setMicLevel(0);
+  }, []);
 
   const startRecording = async () => {
     try {
@@ -451,7 +507,39 @@ export const SafeBridgeApp: React.FC = () => {
         
         // 스트림 정리
         stream.getTracks().forEach(track => track.stop());
+        cleanupAudioVisualization();
       };
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const audioContext: AudioContext = new AudioContextClass();
+        audioContextRef.current = audioContext;
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyserRef.current = analyser;
+        source.connect(analyser);
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const updateLevel = () => {
+          if (!analyserRef.current) {
+            return;
+          }
+          analyserRef.current.getByteTimeDomainData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i += 1) {
+            sum += Math.abs(dataArray[i] - 128);
+          }
+          const average = sum / dataArray.length;
+          const normalized = Math.min(average / 50, 1);
+          setMicLevel(normalized);
+          levelAnimationRef.current = requestAnimationFrame(updateLevel);
+        };
+
+        levelAnimationRef.current = requestAnimationFrame(updateLevel);
+      } else {
+        setMicLevel(0);
+      }
 
       mediaRecorder.start();
       setIsRecording(true);
@@ -460,12 +548,14 @@ export const SafeBridgeApp: React.FC = () => {
       console.error("마이크 접근 오류:", error);
       setRecordingError("마이크 권한이 필요합니다. 브라우저 설정에서 마이크 권한을 허용해주세요.");
       setIsRecording(false);
+      cleanupAudioVisualization();
     }
   };
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
+      cleanupAudioVisualization();
       setIsRecording(false);
     }
   };
@@ -478,8 +568,29 @@ export const SafeBridgeApp: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      cleanupAudioVisualization();
+    };
+  }, [cleanupAudioVisualization]);
+
   const handleApproveHospital = (hospital: Hospital) => {
-    setHospitalApprovalStatus((prev) => ({ ...prev, [hospital.hpid || ""]: "approved" }));
+    const approvedId = hospital.hpid || "";
+    setHospitalApprovalStatus(() => {
+      const nextStatuses: Record<string, ApprovalStatus> = {};
+      hospitals.forEach((h) => {
+        const id = h.hpid || "";
+        if (!id) return;
+        nextStatuses[id] = id === approvedId ? "approved" : "rejected";
+      });
+      return nextStatuses;
+    });
+    setRejectedHospitals(
+      new Set(hospitals.filter((h) => (h.hpid || "") !== approvedId).map((h) => h.hpid || ""))
+    );
     setApprovedHospital(hospital);
     setTwilioAutoCalling(false);
     setActiveCalls({});
@@ -513,14 +624,39 @@ export const SafeBridgeApp: React.FC = () => {
     setCurrentHospitalIndex((prev) => prev + 1);
   };
 
+  const FALLBACK_TWILIO_NUMBER = "010-4932-3766";
+  const buildPatientInfo = () => {
+    const preset = CRITICAL_PRESETS.find((p) => p.label === symptom);
+    const pieces: string[] = [];
+    const condition = symptom || "환자";
+    const preKtas = preset?.preKtasLevel ? `${preset.preKtasLevel}` : "Pre-KTAS 정보 미확인";
+    const ageText = patientAgeBand || "";
+    const sexText = patientSex === "male" ? "남성" : patientSex === "female" ? "여성" : "";
+    const conditionPart = preKtas ? `${condition}(으)로 인한 ${preKtas}` : `${condition} 상태`;
+    pieces.push(`현재 ${conditionPart}`.trim());
+    if (ageText) pieces.push(ageText);
+    if (sexText) pieces.push(sexText);
+    const arsDetail =
+      arsSource === "stt"
+        ? sttText?.trim()
+        : arsSource === "sbar"
+        ? sbarText?.trim()
+        : "";
+    if (arsDetail) {
+      pieces.push(arsSource === "sbar" ? `SBAR 요약: ${arsDetail}` : `STT 원문: ${arsDetail}`);
+    }
+    pieces.push("수용 요청드립니다.");
+    return pieces.filter(Boolean).join(" ");
+  };
+
   const handleStartTwilioCall = async (hospital: Hospital) => {
-    // ngrok URL은 선택사항이므로 제거
+    // 모든 자동 전화는 지정된 안전 테스트 번호로 우회
     try {
       setHospitalApprovalStatus((prev) => ({ ...prev, [hospital.hpid || ""]: "calling" }));
       const result = await makeCall(
-        hospital.dutytel3 || "",
+        FALLBACK_TWILIO_NUMBER,
         hospital.dutyName || "",
-        sttText || null,
+        buildPatientInfo() || sttText || null,
         undefined  // ngrok URL은 선택사항
       );
       if (result.call_sid) {
@@ -531,6 +667,13 @@ export const SafeBridgeApp: React.FC = () => {
             start_time: Date.now(),
           },
         }));
+        const timeoutKey = hospital.hpid || "";
+        if (callTimeoutsRef.current[timeoutKey]) {
+          clearTimeout(callTimeoutsRef.current[timeoutKey]);
+        }
+        callTimeoutsRef.current[timeoutKey] = setTimeout(() => {
+          completeCallAndMoveNext(hospital, "rejected");
+        }, 20000);
       }
     } catch (error: any) {
       console.error("전화 연결 오류:", error);
@@ -539,22 +682,40 @@ export const SafeBridgeApp: React.FC = () => {
     }
   };
 
+  const completeCallAndMoveNext = (hospital: Hospital, decision: "approved" | "rejected") => {
+    const timeoutKey = hospital.hpid || "";
+    const existingTimer = callTimeoutsRef.current[timeoutKey];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete callTimeoutsRef.current[timeoutKey];
+    }
+    if (decision === "approved") {
+      handleApproveHospital(hospital);
+    } else {
+      handleRejectHospital(hospital);
+    }
+    setActiveCalls((prev) => {
+      const newCalls = { ...prev };
+      delete newCalls[hospital.hpid || ""];
+      return newCalls;
+    });
+  };
+
   const checkCallResponse = async (hospital: Hospital) => {
     const callInfo = activeCalls[hospital.hpid || ""];
     if (!callInfo) return;
     try {
       const result = await getCallResponse(callInfo.call_sid);
-      if (result?.digit) {
-        if (result.digit === "1") {
-          handleApproveHospital(hospital);
-        } else if (result.digit === "2") {
-          handleRejectHospital(hospital);
-        }
-        setActiveCalls((prev) => {
-          const newCalls = { ...prev };
-          delete newCalls[hospital.hpid || ""];
-          return newCalls;
-        });
+      const decision = result?.digit === "1" ? "approved" : result?.digit === "2" ? "rejected" : null;
+      const status = result?.status;
+
+      if (decision) {
+        completeCallAndMoveNext(hospital, decision);
+        return;
+      }
+
+      if (status && ["busy", "failed", "no-answer", "canceled", "completed"].includes(status)) {
+        completeCallAndMoveNext(hospital, "rejected");
       }
     } catch (e) {
       console.error("전화 응답 확인 실패:", e);
@@ -583,12 +744,17 @@ export const SafeBridgeApp: React.FC = () => {
     const currentHospital = hospitals[currentHospitalIndex];
     if (!currentHospital) return;
 
-    // 아직 전화를 걸지 않았다면
+    let timer: ReturnType<typeof setTimeout> | null = null;
     if (!activeCalls[currentHospital.hpid || ""]) {
-      handleStartTwilioCall(currentHospital);
+      timer = setTimeout(() => {
+        handleStartTwilioCall(currentHospital);
+      }, 10000);
     }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital]);
+  }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital, activeCalls]);
 
   useEffect(() => {
     if (twilioAutoCalling && !hasCallableHospital) {
@@ -633,7 +799,7 @@ export const SafeBridgeApp: React.FC = () => {
           const exists = prev.some((h) => h.hpid === nextCandidate.hpid);
           return exists ? prev : [...prev, nextCandidate];
         });
-        await fetchRoutePaths([nextCandidate], { append: true });
+        await fetchRoutePaths([nextCandidate], { append: true, updateDistances: true });
         if (!cancelled) {
           setHasExhaustedHospitals(false);
         }
@@ -648,7 +814,7 @@ export const SafeBridgeApp: React.FC = () => {
           const newOptions = neighborOptions.filter((h) => !existingIds.has(h.hpid));
           return [...prev, ...newOptions];
         });
-        await fetchRoutePaths(neighborOptions, { append: true });
+        await fetchRoutePaths(neighborOptions, { append: true, updateDistances: true });
         if (!cancelled) {
           setHasExhaustedHospitals(false);
         }
@@ -717,6 +883,12 @@ export const SafeBridgeApp: React.FC = () => {
           setInputMode={setInputMode}
           isRecording={isRecording}
           onToggleRecording={handleToggleRecording}
+          micLevel={micLevel}
+          recordingError={recordingError}
+          patientSex={patientSex}
+          setPatientSex={setPatientSex}
+          patientAgeBand={patientAgeBand}
+          setPatientAgeBand={setPatientAgeBand}
         />
 
         <HospitalPrioritySelector
@@ -728,23 +900,66 @@ export const SafeBridgeApp: React.FC = () => {
           }}
         />
 
-        <div className="bg-white rounded-xl shadow-sm p-3 md:p-4 border border-slate-200">
-          <div className="flex justify-center">
+        <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 border border-slate-200">
+          <div className="flex flex-col md:flex-row items-center gap-4">
+            <div className="flex-1 text-center md:text-left">
+              <p className="text-xs uppercase tracking-[0.2em] text-emerald-500 font-semibold mb-1">
+                Emergency Dispatch
+              </p>
+              <h3 className="text-lg md:text-xl font-bold text-slate-900">응급환자 수용 가능 병원 탐색</h3>
+              <p className="text-sm md:text-base text-slate-600 mt-1">
+                버튼을 누르면 병원 조회와 동시에 Twilio ARS(010-4932-3766) 자동 통화가 연속으로 진행됩니다.
+              </p>
+            </div>
             <button
-              className="inline-flex items-center rounded-lg bg-emerald-600 text-white px-6 py-3 text-sm md:text-base font-semibold shadow-sm hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full md:w-auto inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-green-600 text-white px-6 md:px-10 py-5 text-base md:text-xl font-bold shadow-xl hover:from-emerald-600 hover:to-green-700 active:scale-[0.99] transition disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={handleSearchHospitals}
               disabled={loadingHospitals || !coords.lat || !coords.lon || !region}
             >
-              {loadingHospitals ? "병원 탐색 중..." : "응급환자 수용 가능 병원 찾기"}
+              {loadingHospitals ? (
+                <>
+                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  <span>병원 탐색 중...</span>
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="w-5 h-5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M12 19V5M12 5l-4 4M12 5l4 4"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M5 12a7 7 0 0 1 14 0v2a7 7 0 1 1-14 0v-2z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <div className="text-left leading-tight">
+                    <div>응급환자 수용 가능</div>
+                    <div className="text-xs font-semibold text-emerald-100">검색 후 자동 ARS 연결</div>
+                  </div>
+                </>
+              )}
             </button>
           </div>
         </div>
 
         {/* 우측: 근처 응급의료기관 리스트 */}
-        <section className="bg-white rounded-xl shadow-sm p-3 md:p-4 border border-slate-200 flex flex-col h-[420px] md:h-[460px]">
+        {showHospitalPanel && (
+        <section className="bg-white rounded-xl shadow-sm p-3 md:p-4 border border-slate-200 flex flex-col">
           <div className="flex items-center justify-between mb-2 md:mb-3">
             <div>
-              <h2 className="text-sm md:text-base font-semibold">근처 응급의료기관 수용 가능 확인중</h2>
+              <h2 className="text-sm md:text-base font-semibold">근처 응급의료기관 현황</h2>
               <p className="text-[10px] md:text-[11px] text-slate-500 mt-0.5">
                 실제 서비스에서는 실시간 수용 가능 여부와 거리, 장비 여건 등을 함께 반영합니다.
               </p>
@@ -759,81 +974,38 @@ export const SafeBridgeApp: React.FC = () => {
           {!hospitals.length && (
             <p className="text-xs md:text-sm text-slate-500">표시할 병원 정보가 없습니다.</p>
           )}
-          <div className="mt-1 md:mt-2 flex-1 overflow-y-auto pr-1 space-y-3">
-            {hospitals.map((h, idx) => {
-              const approvalStatus = hospitalApprovalStatus[h.hpid || ""] || "pending";
-              const isRejected = rejectedHospitals.has(h.hpid || "");
-              const isAccepted = approvalStatus === "approved";
-              
-              return (
-                <div key={h.hpid || idx} className="rounded-lg border border-slate-200 p-3 md:p-3.5 bg-slate-50 flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm md:text-base font-semibold truncate">
-                        {h.dutyName || "병원 명칭 미상"}
-                        <span className="ml-1 text-[11px] md:text-xs font-normal text-slate-600">
-                          ({h.dutyEmclsName || h.dutyDivNam || "응급의료기관"})
-                        </span>
-                      </div>
-                      <div className="text-[11px] md:text-xs text-slate-600 truncate">{h.dutyAddr || "주소 정보 없음"}</div>
-                    </div>
-                    <div className="text-right text-[11px] md:text-xs text-slate-600 space-y-0.5 flex-shrink-0">
-                      <div>약 {typeof h.distance_km === "number" ? h.distance_km.toFixed(1) : h.distance_km || "-"} km</div>
-                      <div>예상 {h.eta_minutes || "-"}분</div>
-                    </div>
+          {!!hospitals.length && (
+            <div className="mt-1 md:mt-3 overflow-hidden">
+              <div className="flex overflow-x-auto snap-x snap-mandatory gap-5 pb-4 pr-4">
+                {hospitals.map((h, idx) => (
+                  <div
+                    key={h.hpid || idx}
+                    className="snap-center shrink-0 w-[calc(100vw-3rem)] md:w-[580px]"
+                  >
+                    <HospitalCard
+                      hospital={h}
+                      index={idx}
+                      region={region}
+                      approvalStatus={hospitalApprovalStatus[h.hpid || ""] || "pending"}
+                      isRejected={rejectedHospitals.has(h.hpid || "")}
+                      isActiveCandidate={!approvedHospital && idx === currentHospitalIndex}
+                      canInteract={!approvedHospital}
+                      onApprove={handleApproveHospital}
+                      onReject={handleRejectHospital}
+                      onStartCall={handleStartTwilioCall}
+                      onOpenChat={handleOpenChat}
+                    />
                   </div>
-                  <div className="mt-1 flex items-center justify-between text-[11px] md:text-xs text-slate-600">
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-500">대표번호</span>
-                      <span className="font-medium text-slate-800">{h.dutytel3 || "-"}</span>
-                    </div>
-                  </div>
-                  <div className="mt-1.5 flex items-center justify-between text-[11px] md:text-xs text-slate-600">
-                    <div className="max-w-[65%] truncate" title={h._meets_conditions ? "증상 맞춤 병원" : "기본 병원"}>
-                      기준: {h._meets_conditions ? "증상 맞춤 병원" : "거리 및 가용성 기준"}
-                    </div>
-                    <div className="flex-shrink-0 flex items-center gap-2">
-                      {isAccepted ? (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenChat(h)}
-                          className="inline-flex items-center rounded-full bg-emerald-600 text-white px-3 py-1 text-[10px] md:text-[11px] font-semibold shadow-sm hover:bg-emerald-700"
-                        >
-                          수용 가능
-                        </button>
-                      ) : isRejected ? (
-                        <span className="inline-flex items-center rounded-full bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] md:text-[11px]">
-                          수용 거절
-                        </span>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleApproveHospital(h)}
-                            className="inline-flex items-center rounded-full bg-green-600 text-white px-3 py-1 text-[10px] md:text-[11px] font-semibold shadow-sm hover:bg-green-700"
-                          >
-                            승낙
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRejectHospital(h)}
-                            className="inline-flex items-center rounded-full bg-red-600 text-white px-3 py-1 text-[10px] md:text-[11px] font-semibold shadow-sm hover:bg-red-700"
-                          >
-                            거절
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
+        )}
         
         {approvedHospital && <ApprovedHospitalInfo approvedHospital={approvedHospital} />}
         
-        {coords.lat && coords.lon && displayedMapHospitals.length > 0 && (
+        {!approvedHospital && coords.lat && coords.lon && displayedMapHospitals.length > 0 && (
           <MapDisplay
             coords={coords}
             hospitals={displayedMapHospitals}
@@ -866,6 +1038,9 @@ export const SafeBridgeApp: React.FC = () => {
             lastUpdated: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
           }}
           sttText={sttText}
+          mapCoords={coords}
+          mapRoutePaths={routePaths}
+          resolveHospitalColor={resolveHospitalColor}
           onClose={() => setIsChatOpen(false)}
           onHandoverComplete={(sessionId) => {
             if (chatSession && chatSession.id === sessionId) {

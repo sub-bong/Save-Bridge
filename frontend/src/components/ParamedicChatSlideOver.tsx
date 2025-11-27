@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, ChangeEvent } from "react";
-import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital } from "../types";
+import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital, Coords } from "../types";
+import { MapDisplay } from "./MapDisplay";
 
 interface ParamedicChatSlideOverProps {
   isOpen: boolean;
@@ -9,6 +10,9 @@ interface ParamedicChatSlideOverProps {
   sttText?: string;
   onClose: () => void;
   onHandoverComplete: (sessionId: string) => void;
+  mapCoords: Coords;
+  mapRoutePaths: Record<string, number[][]>;
+  resolveHospitalColor: (hospital: Hospital, index: number) => string;
 }
 
 const PARAMEDIC_ID = "A100"; // 구급대원 식별코드 (실제로는 설정에서 가져올 수 있음)
@@ -21,6 +25,9 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   sttText = "",
   onClose,
   onHandoverComplete,
+  mapCoords,
+  mapRoutePaths,
+  resolveHospitalColor,
 }) => {
   const [localSession, setLocalSession] = useState<HospitalHandoverSummary>(session);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -121,7 +128,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex transition-all duration-300 ease-in-out">
       <div className="flex-1 bg-black/30 transition-opacity duration-300" onClick={onClose} />
-      <div className="w-full max-w-3xl h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col slide-in-from-right">
+      <div className="w-full max-w-6xl h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col slide-in-from-right">
         {/* 상단 헤더 */}
         <header className="h-14 flex items-center justify-between px-4 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2">
@@ -158,7 +165,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
         {/* 채팅 + 메타 2-분할 */}
         <div className="flex flex-1 min-h-0">
           {/* 채팅 영역 */}
-          <section className="flex-1 flex flex-col min-w-[300px] border-r border-slate-200">
+          <section className="flex-[3] flex flex-col min-w-[360px] border-r border-slate-200">
             <div className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
               {messages.map((m) => (
                 <ParamedicMessageBubble key={m.id} message={m} />
@@ -207,21 +214,32 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           </section>
 
           {/* 오른쪽 메타 정보 */}
-          <aside className="w-80 flex flex-col bg-slate-50">
+          <aside className="flex-[2] min-w-[320px] flex flex-col bg-slate-50">
             <div className="px-3 py-2 border-b border-slate-200 bg-slate-50">
               <div className="text-xs font-semibold text-slate-700 mb-1">환자 / 이송 정보 요약</div>
               <div className="text-xs text-slate-500">병원 기준 · {localSession.hospitalName}</div>
             </div>
             <div className="p-3 flex-1 flex flex-col gap-3 overflow-y-auto">
-              <div className="flex-1 rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-[200px]">
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-[220px]">
                 <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-800">현재 위치 / 경로 (연동 예정)</span>
+                  <span className="text-xs font-semibold text-slate-800">현재 위치 / 경로</span>
                   <span className="text-[10px] text-slate-500">구급차 기준</span>
                 </div>
-                <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
-                  <div>현재 위치와 병원까지의 최단 경로를</div>
-                  <div>지도 컴포넌트(예: Google Maps)와 연동하는 영역입니다.</div>
-                </div>
+                {hospital ? (
+                  <MapDisplay
+                    coords={mapCoords}
+                    hospitals={[hospital]}
+                    routePaths={mapRoutePaths}
+                    approvedHospital={hospital}
+                    resolveHospitalColor={resolveHospitalColor}
+                    compact
+                    compactHeightClass="h-[240px]"
+                  />
+                ) : (
+                  <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
+                    <div>표시할 병원 정보가 없습니다.</div>
+                  </div>
+                )}
               </div>
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-800">
                 <div className="flex items-center justify-between mb-1">

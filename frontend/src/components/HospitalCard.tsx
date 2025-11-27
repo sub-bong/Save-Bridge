@@ -191,48 +191,66 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 mt-3">
+      <div className="flex flex-col gap-2 mt-3">
         <a
           href={hospital.dutytel3 ? `tel:${hospital.dutytel3}` : undefined}
           onClick={(e) => {
             if (!hospital.dutytel3) e.preventDefault();
           }}
-          className={`flex-1 inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-bold transition shadow-md min-h-[48px] ${
-            hospital.dutytel3 ? "bg-red-700 text-white hover:bg-red-800" : "bg-gray-300 text-gray-500 cursor-not-allowed"
+          className={`w-full inline-flex items-center justify-between gap-3 rounded-2xl px-5 py-4 text-sm font-bold shadow-md border ${
+            hospital.dutytel3
+              ? "bg-gradient-to-r from-rose-600 to-red-600 text-white hover:from-rose-700 hover:to-red-700 border-transparent"
+              : "bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed"
           }`}
         >
-          <span>응급실 전화</span>
-          <span className="font-mono">{hospital.dutytel3 || "정보 없음"}</span>
+          <span className="flex flex-col gap-0.5 text-left">
+            <span className="text-[11px] uppercase tracking-[0.2em] text-white/70">
+              응급실 전화번호
+            </span>
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M5 4h4l2 5-3 2c1.5 3 3.5 5 6.5 6l2-3 5 2v4c0 1-1 2-2 2C9.163 22 2 14.837 2 6c0-1 1-2 2-2z"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span>수동 전화 연결</span>
+          </span>
+          <span className="font-mono text-lg">{hospital.dutytel3 || "정보 없음"}</span>
         </a>
+
         {statusKey === "approved" && onOpenChat && (
           <button
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-bold transition shadow-md min-h-[48px] bg-emerald-600 text-white hover:bg-emerald-700"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-4 text-sm font-bold shadow-md bg-emerald-600 text-white hover:bg-emerald-700"
             onClick={() => onOpenChat(hospital)}
           >
-            수용 가능
+            수용 현황 메모 열기
           </button>
         )}
+
         {canInteract && (
-          <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
-              className="px-4 py-3 rounded-lg bg-green-700 text-white text-sm font-bold hover:bg-green-800 transition shadow-md min-h-[48px]"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-emerald-500 to-green-600 text-white hover:from-emerald-600 hover:to-green-700"
               onClick={() => onApprove(hospital)}
             >
-              승낙
+              <span>수용 확정</span>
             </button>
             <button
-              className="px-4 py-3 rounded-lg bg-red-700 text-white text-sm font-bold hover:bg-red-800 transition shadow-md min-h-[48px]"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-red-500 to-rose-600 text-white hover:from-red-600 hover:to-rose-700"
               onClick={() => onReject(hospital)}
             >
-              거절
+              <span>수용 불가</span>
             </button>
             <button
-              className="px-4 py-3 rounded-lg bg-blue-700 text-white text-sm font-bold hover:bg-blue-800 transition shadow-md min-h-[48px]"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-sky-500 to-blue-600 text-white hover:from-sky-600 hover:to-blue-700"
               onClick={() => onStartCall(hospital)}
             >
-              ARS 자동요청
+              <span>ARS 재요청</span>
             </button>
-          </>
+          </div>
         )}
       </div>
     </div>
