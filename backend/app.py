@@ -8,16 +8,19 @@ Twilio의 Gather 콜백을 받기 위한 Flask 서버
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.rest import Client as TwilioClient
 import time
 import os
 import requests
 import tempfile
 import math
+import uuid
 from urllib.parse import urlparse
 from typing import Optional, Tuple, Dict, Any, List, Iterable
 from collections import defaultdict
 from xml.etree import ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 # 설정 파일 import
 from config import (
@@ -25,7 +28,9 @@ from config import (
     ER_BED_URL, EGET_BASE_URL, EGET_LIST_URL, STRM_LIST_URL, KAKAO_DIRECTIONS_URL,
     KAKAO_COORD2REGION_URL, KAKAO_COORD2ADDR_URL, KAKAO_ADDRESS_URL,
     SYMPTOM_RULES, METRO_FALLBACK_PROVINCE, PROVINCE_INCLUDE_METROS,
-    FLASK_PORT, CORS_ORIGINS
+    FLASK_PORT, CORS_ORIGINS,
+    TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_CALLER_NUMBER,
+    TWILIO_FALLBACK_TARGET, TWILIO_CALLBACK_BASE_URL
 )
 
 app = Flask(__name__)
@@ -39,11 +44,21 @@ try:
     if OPENAI_API_KEY:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
 except ImportError:
-    print("⚠️ OpenAI 패키지가 설치되지 않았습니다. STT 기능을 사용하려면 'pip install openai'를 실행하세요.")
+    print(" OpenAI 패키지가 설치되지 않았습니다. STT 기능을 사용하려면 'pip install openai'를 실행하세요.")
+
+# Twilio REST 클라이언트 (선택)
+twilio_client: Optional[TwilioClient] = None
+if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+    try:
+        twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    except Exception as exc:
+        print(f" Twilio 클라이언트를 초기화하지 못했습니다: {exc}")
 
 
 # 전역 변수: 다이얼 입력 저장
 call_responses = {}
+active_mock_calls = {}
+call_metadata: Dict[str, Dict[str, Any]] = {}
 
 # 증상별 필수 요구사항은 config.py에서 import
 
@@ -112,6 +127,31 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
         a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
         c = 2 * math.asin(math.sqrt(a))
         return R * c
+
+def normalize_phone_number(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+    if not digits:
+        return None
+    if digits.startswith("0"):
+        digits = "82" + digits[1:]
+    if not digits.startswith("+"):
+        digits = f"+{digits}"
+    return digits
+
+def resolve_callback_base(preferred: Optional[str] = None) -> Optional[str]:
+    if preferred:
+        return preferred.rstrip("/")
+    if TWILIO_CALLBACK_BASE_URL:
+        return TWILIO_CALLBACK_BASE_URL.rstrip("/")
+    try:
+        logs_path = Path(__file__).resolve().parent.parent / "logs" / ".ngrok_url"
+        if logs_path.exists():
+            return logs_path.read_text().strip()
+    except Exception:
+        pass
+    return None
 
 def guess_region_from_address(addr: Optional[str]) -> Optional[Tuple[str, str]]:
     if not addr:
@@ -791,6 +831,90 @@ def api_stt_transcribe():
         print(f"STT 오류: {error_detail}")
         return jsonify({"error": f"음성 인식 오류: {str(e)}"}), 500
 
+# Telephony API (Twilio Bridge)
+@app.route('/api/telephony/call', methods=['POST', 'OPTIONS'])
+def api_telephony_call():
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    data = request.get_json(force=True, silent=True) or {}
+    hospital_tel = data.get('hospital_tel') or TWILIO_FALLBACK_TARGET
+    hospital_name = data.get('hospital_name') or "미상 응급의료기관"
+    patient_info = data.get('patient_info')
+    callback_base_override = data.get('callback_url')
+    
+    normalized_to = normalize_phone_number(hospital_tel) or normalize_phone_number(TWILIO_FALLBACK_TARGET)
+    normalized_from = normalize_phone_number(TWILIO_CALLER_NUMBER) if TWILIO_CALLER_NUMBER else None
+    
+    if not normalized_to:
+        return jsonify({"error": "연결할 응급실 전화번호를 확인할 수 없습니다."}), 400
+    
+    call_sid = str(uuid.uuid4())
+    used_twilio = False
+    if twilio_client and normalized_from:
+        callback_base = resolve_callback_base(callback_base_override)
+        if callback_base:
+            voice_url = f"{callback_base}/twilio/gather"
+            status_url = f"{callback_base}/twilio/status"
+            try:
+                call = twilio_client.calls.create(
+                    to=normalized_to,
+                    from_=normalized_from,
+                    url=voice_url,
+                    method="POST",
+                    status_callback=status_url,
+                    status_callback_method="POST",
+                    status_callback_event=["initiated", "ringing", "answered", "completed"],
+                    record=False
+                )
+                call_sid = call.sid
+                used_twilio = True
+            except Exception as exc:
+                print(f" Twilio 전화 연결 실패: {exc}")
+        else:
+            print(" Twilio 콜백 URL을 찾을 수 없어 로컬 모드로 전환합니다.")
+    
+    if not used_twilio:
+        active_mock_calls[call_sid] = {
+            "hospital_tel": normalized_to,
+            "hospital_name": hospital_name,
+            "patient_info": patient_info,
+            "timestamp": time.time(),
+        }
+        print(f" [Mock Call] {hospital_name} ({normalized_to}) 대상 호출. call_sid={call_sid}")
+    
+    # 초기 상태 저장 (Twilio 콜백에서 digit 업데이트)
+    call_metadata[call_sid] = {
+        "patient_info": patient_info or "",
+        "hospital_name": hospital_name,
+        "hospital_tel": normalized_to,
+        "timestamp": time.time(),
+    }
+    call_responses[call_sid] = {
+        "digit": None,
+        "timestamp": time.time(),
+        "patient_info": patient_info or "",
+        "status": "initiated"
+    }
+    return jsonify({"call_sid": call_sid}), 200
+
+@app.route('/api/telephony/response/<call_sid>', methods=['GET'])
+def api_telephony_response(call_sid: str):
+    record = call_responses.get(call_sid)
+    if record:
+        return jsonify({
+            "digit": record.get("digit"),
+            "status": record.get("status")
+        }), 200
+    mock = active_mock_calls.get(call_sid)
+    if mock:
+        return jsonify({
+            "digit": mock.get("digit"),
+            "status": mock.get("status")
+        }), 200
+    return jsonify({"digit": None, "status": None}), 404
+
+
 # 병원 조회 API
 @app.route('/api/hospitals/top3', methods=['POST', 'OPTIONS'])
 def api_hospitals_top3():
@@ -1112,7 +1236,7 @@ def index():
     <html>
     <head><title>Twilio Flask Server</title></head>
     <body style="font-family: Arial; padding: 2rem;">
-        <h1>✅ Twilio Flask Server 실행 중</h1>
+        <h1>Twilio Flask Server 실행 중</h1>
         <p><b>포트:</b> 5001 (macOS AirPlay가 5000 사용)</p>
         <p><b>엔드포인트:</b></p>
         <ul>
@@ -1128,7 +1252,7 @@ def index():
             <li><code>/api/hospitals/top3</code> - 병원 Top3 조회</li>
         </ul>
         <hr>
-        <p>🔗 <b>ngrok 사용법:</b></p>
+        <p><b>ngrok 사용법:</b></p>
         <ol>
             <li>새 터미널 열기</li>
             <li><code>ngrok http 5001</code> 실행</li>
@@ -1143,28 +1267,44 @@ def twilio_gather_callback():
     """Twilio Gather 콜백 - 다이얼 입력 받기"""
     digits = request.form.get('Digits', '')
     call_sid = request.form.get('CallSid', '')
+    patient_info = call_metadata.get(call_sid, {}).get("patient_info") or call_responses.get(call_sid, {}).get("patient_info")
     
-    print(f"\n📞 [Twilio Callback] Call SID: {call_sid}")
-    print(f"🔢 입력된 다이얼: {digits}")
-    
-    # 입력값 저장
-    call_responses[call_sid] = {
-        "digit": digits,
-        "timestamp": time.time()
-    }
+    print(f"\n [Twilio Callback] Call SID: {call_sid}")
+    print(f" 입력된 다이얼: {digits}")
     
     # 응답 TwiML 생성
     response = VoiceResponse()
     
+    if not digits:
+        message = patient_info or "응급환자 상태 정보가 전달되지 않았습니다."
+        gather = response.gather(
+            numDigits=1,
+            action="/twilio/gather",
+            method="POST",
+            timeout=8
+        )
+        gather.say(message, language="ko-KR", voice="Polly.Seoyeon")
+        gather.pause(length=1)
+        gather.say("해당 환자 수용이 가능하시면 1번, 수용이 불가능하시면 2번을 눌러주세요.", language="ko-KR", voice="Polly.Seoyeon")
+        return str(response), 200, {'Content-Type': 'text/xml'}
+    
+    # 입력값 저장
+    record = call_responses.setdefault(call_sid, {})
+    record.update({
+        "digit": digits,
+        "timestamp": time.time(),
+        "patient_info": patient_info
+    })
+    
     if digits == "1":
         response.say("입실 승인 확인되었습니다. 감사합니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print("✅ 1번 입력 - 입실 승인")
+        print(" 1번 입력 - 입실 승인")
     elif digits == "2":
         response.say("입실 불가 확인되었습니다. 다른 병원을 찾겠습니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print("❌ 2번 입력 - 입실 거절")
+        print(" 2번 입력 - 입실 거절")
     else:
         response.say("잘못된 입력입니다.", language="ko-KR", voice="Polly.Seoyeon")
-        print(f"⚠️ 잘못된 입력: {digits}")
+        print(f" 잘못된 입력: {digits}")
     
     return str(response), 200, {'Content-Type': 'text/xml'}
 
@@ -1174,7 +1314,9 @@ def twilio_status_callback():
     call_sid = request.form.get('CallSid', '')
     call_status = request.form.get('CallStatus', '')
     
-    print(f"\n📡 [통화 상태] Call SID: {call_sid}, Status: {call_status}")
+    print(f"\n [통화 상태] Call SID: {call_sid}, Status: {call_status}")
+    record = call_responses.setdefault(call_sid, {})
+    record['status'] = call_status or record.get('status')
     
     return "", 200
 
@@ -1185,14 +1327,14 @@ def get_responses():
         return "<h2>저장된 응답이 없습니다.</h2>"
     
     html = "<html><head><title>저장된 응답</title></head><body style='font-family: Arial; padding: 2rem;'>"
-    html += "<h1>📋 저장된 다이얼 응답</h1><hr>"
+    html += "<h1>저장된 다이얼 응답</h1><hr>"
     
     for call_sid, data in call_responses.items():
         digit = data.get('digit')
         timestamp = data.get('timestamp')
         time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
         
-        status = "✅ 승인" if digit == "1" else "❌ 거절" if digit == "2" else "⚠️ 기타"
+        status = "승인" if digit == "1" else "거절" if digit == "2" else "기타"
         
         html += f"""
         <div style='border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; border-radius: 8px;'>
@@ -1222,19 +1364,19 @@ def get_response_by_sid(call_sid):
 def clear_responses():
     """저장된 응답 초기화"""
     call_responses.clear()
-    return "<h2>✅ 모든 응답이 초기화되었습니다.</h2><br><a href='/'>홈으로</a>"
+    return "<h2>모든 응답이 초기화되었습니다.</h2><br><a href='/'>홈으로</a>"
 
 if __name__ == '__main__':
     PORT = FLASK_PORT  # config.py에서 가져옴
     
     print("=" * 60)
-    print("🚀 Twilio Flask Server 시작")
+    print(" Twilio Flask Server 시작")
     print("=" * 60)
-    print(f"📍 URL: http://localhost:{PORT}")
-    print(f"📍 Gather Callback: http://localhost:{PORT}/twilio/gather")
-    print(f"📍 Status Callback: http://localhost:{PORT}/twilio/status")
+    print(f" URL: http://localhost:{PORT}")
+    print(f" Gather Callback: http://localhost:{PORT}/twilio/gather")
+    print(f" Status Callback: http://localhost:{PORT}/twilio/status")
     print("=" * 60)
-    print("\n🔗 다음 단계:")
+    print("\n 다음 단계:")
     print(f"1. 새 터미널을 열어서 'ngrok http {PORT}' 실행")
     print("2. ngrok URL (예: https://xxxx.ngrok.io)을 복사")
     print("3. Streamlit 앱의 'Twilio 다이얼 입력 설정'에 URL 입력\n")
