@@ -160,13 +160,32 @@ export const transcribeAudio = async (audioFile: File): Promise<string> => {
   try {
     const formData = new FormData();
     formData.append("audio", audioFile);
+    // Content-Type을 명시하지 않으면 axios가 자동으로 multipart/form-data와 boundary를 설정합니다
     const res = await axios.post(`${API_BASE_URL}/api/stt/transcribe`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
+      withCredentials: true,
+      headers: {
+        // Content-Type을 명시하지 않아야 axios가 boundary를 자동으로 설정합니다
+      },
     });
     return res.data?.text || "";
   } catch (error: any) {
     console.error("음성 인식 실패:", error);
-    throw new Error(error.response?.data?.message || "음성 인식 중 오류가 발생했습니다.");
+    
+    // 더 자세한 에러 메시지 추출
+    let errorMessage = "음성 인식 중 오류가 발생했습니다.";
+    
+    if (error.response) {
+      // 서버 응답이 있는 경우
+      errorMessage = error.response.data?.error || error.response.data?.message || errorMessage;
+    } else if (error.request) {
+      // 요청은 보냈지만 응답을 받지 못한 경우 (서버가 실행되지 않았을 수 있음)
+      errorMessage = "서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.";
+    } else {
+      // 요청 설정 중 오류
+      errorMessage = error.message || errorMessage;
+    }
+    
+    throw new Error(errorMessage);
   }
 };
 
@@ -263,6 +282,206 @@ export const getCurrentUser = async (): Promise<{ team_id: number; ems_id: strin
     }
     console.error("사용자 정보 조회 실패:", error);
     return null;
+  }
+};
+
+// 채팅 메시지 API
+export const getChatMessages = async (sessionId: number): Promise<Array<{
+  message_id: number;
+  session_id: number;
+  sender_type: string;
+  sender_ref_id: string;
+  content: string;
+  image_path?: string;
+  image_url?: string;
+  sent_at: string;
+}>> => {
+  try {
+    const res = await axios.get(`${API_BASE_URL}/api/chat/messages`, {
+      params: { session_id: sessionId },
+      withCredentials: true,
+    });
+    return res.data.messages || [];
+  } catch (error: any) {
+    console.error("채팅 메시지 조회 실패:", error);
+    throw new Error(error.response?.data?.error || "채팅 메시지 조회 중 오류가 발생했습니다.");
+  }
+};
+
+export const sendChatMessage = async (
+  sessionId: number,
+  senderType: "EMS" | "HOSPITAL",
+  senderRefId: string,
+  content: string,
+  imagePath?: string
+): Promise<{
+  message_id: number;
+  session_id: number;
+  sender_type: string;
+  sender_ref_id: string;
+  content: string;
+  image_path?: string;
+  image_url?: string;
+  sent_at: string;
+}> => {
+  try {
+    const res = await axios.post(
+      `${API_BASE_URL}/api/chat/messages`,
+      {
+        session_id: sessionId,
+        sender_type: senderType,
+        sender_ref_id: senderRefId,
+        content: content,
+        image_path: imagePath || null,
+      },
+      {
+        withCredentials: true,
+      }
+    );
+    return res.data;
+  } catch (error: any) {
+    console.error("채팅 메시지 전송 실패:", error);
+    throw new Error(error.response?.data?.error || "채팅 메시지 전송 중 오류가 발생했습니다.");
+  }
+};
+
+// ChatSession 조회 API
+export const getChatSession = async (
+  requestId?: number,
+  assignmentId?: number
+): Promise<{
+  session_id: number;
+  request_id: number;
+  assignment_id: number;
+  started_at: string;
+  ended_at?: string;
+} | null> => {
+  try {
+    const params: any = {};
+    if (requestId) params.request_id = requestId;
+    if (assignmentId) params.assignment_id = assignmentId;
+    
+    const res = await axios.get(`${API_BASE_URL}/api/chat/session`, {
+      params,
+      withCredentials: true,
+    });
+    return res.data;
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      return null; // 세션이 없음
+    }
+    console.error("ChatSession 조회 실패:", error);
+    return null;
+  }
+};
+
+// ChatSession 목록 조회 API (응급실 대시보드용)
+export const getChatSessions = async (
+  hospitalId?: string
+): Promise<Array<{
+  session_id: number;
+  request_id: number;
+  assignment_id: number;
+  started_at: string;
+  ended_at?: string;
+  ems_id: string | null;
+  hospital_name: string | null;
+  patient_age: number | null;
+  patient_sex: string | null;
+  pre_ktas_class: string | null;
+  rag_summary: string | null;
+  latest_message: {
+    content: string | null;
+    sent_at: string | null;
+    sender_type: string | null;
+  } | null;
+}>> => {
+  try {
+    const params: any = {};
+    if (hospitalId) params.hospital_id = hospitalId;
+    
+    const res = await axios.get(`${API_BASE_URL}/api/chat/sessions`, {
+      params,
+      withCredentials: true,
+    });
+    return res.data.sessions || [];
+  } catch (error: any) {
+    console.error("ChatSession 목록 조회 실패:", error);
+    throw new Error(error.response?.data?.error || "ChatSession 목록 조회 중 오류가 발생했습니다.");
+  }
+};
+
+// EmergencyRequest 생성 API
+export const createEmergencyRequest = async (data: {
+  team_id: number;
+  patient_sex: string;
+  patient_age: number;
+  pre_ktas_class: string;
+  stt_full_text?: string;
+  rag_summary?: string;
+  current_lat: number;
+  current_lon: number;
+}): Promise<{
+  request_id: number;
+  team_id: number;
+  requested_at: string;
+}> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/emergency/request`, data, {
+      withCredentials: true,
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("EmergencyRequest 생성 실패:", error);
+    throw new Error(error.response?.data?.error || "EmergencyRequest 생성 중 오류가 발생했습니다.");
+  }
+};
+
+// RequestAssignment 생성 및 병원에 전화 걸기 API
+export const callHospital = async (data: {
+  request_id: number;
+  hospital_id: string;
+  distance_km?: number;
+  eta_minutes?: number;
+  twilio_sid?: string;
+}): Promise<{
+  assignment_id: number;
+  request_id: number;
+  hospital_id: string;
+  response_status: string;
+  called_at: string;
+}> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/emergency/call-hospital`, data, {
+      withCredentials: true,
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("병원 전화 걸기 실패:", error);
+    throw new Error(error.response?.data?.error || "병원 전화 걸기 중 오류가 발생했습니다.");
+  }
+};
+
+// RequestAssignment 응답 상태 업데이트 API (병원 승인/거절)
+export const updateResponseStatus = async (data: {
+  assignment_id: number;
+  response_status: "승인" | "거절" | "대기중";
+  twilio_sid?: string;
+}): Promise<{
+  assignment_id: number;
+  response_status: string;
+  responded_at: string;
+  session_id?: number;
+  request_id?: number;
+}> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/emergency/update-response`, data, {
+      withCredentials: true,
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("응답 상태 업데이트 실패:", error);
+    throw new Error(error.response?.data?.error || "응답 상태 업데이트 중 오류가 발생했습니다.");
   }
 };
 

@@ -888,7 +888,8 @@ def api_stt_transcribe():
             fh.write(f"[{timestr}] {translated_text}\n")
         
         # STT 결과를 DB에 저장 (request_id가 제공된 경우)
-        request_id = request.form.get('request_id', type=int) or (request.get_json() or {}).get('request_id')
+        # multipart/form-data에서는 request.get_json()이 작동하지 않으므로 request.form만 사용
+        request_id = request.form.get('request_id', type=int)
         if request_id:
             try:
                 emergency_request = EmergencyRequest.query.get(request_id)
@@ -976,7 +977,12 @@ def api_telephony_call():
     }
     
     # DB에 저장: assignment_id가 제공된 경우 RequestAssignment 업데이트
-    assignment_id = data.get('assignment_id', type=int)
+    assignment_id = data.get('assignment_id')
+    if assignment_id:
+        try:
+            assignment_id = int(assignment_id)
+        except (ValueError, TypeError):
+            assignment_id = None
     if assignment_id:
         try:
             assignment = RequestAssignment.query.get(assignment_id)
@@ -1341,14 +1347,27 @@ def api_create_emergency_request():
     
     try:
         data = request.get_json()
-        team_id = data.get('team_id', type=int)
+        if not data:
+            return jsonify({"error": "요청 데이터가 없습니다."}), 400
+        
+        team_id = data.get('team_id')
         patient_sex = data.get('patient_sex')
-        patient_age = data.get('patient_age', type=int)
+        patient_age = data.get('patient_age')
         pre_ktas_class = data.get('pre_ktas_class')
         stt_full_text = data.get('stt_full_text')
         rag_summary = data.get('rag_summary')
-        current_lat = data.get('current_lat', type=float)
-        current_lon = data.get('current_lon', type=float)
+        current_lat = data.get('current_lat')
+        current_lon = data.get('current_lon')
+        
+        # 타입 변환
+        if team_id is not None:
+            team_id = int(team_id)
+        if patient_age is not None:
+            patient_age = int(patient_age)
+        if current_lat is not None:
+            current_lat = float(current_lat)
+        if current_lon is not None:
+            current_lon = float(current_lon)
         
         if not all([team_id, patient_sex, patient_age, pre_ktas_class, current_lat, current_lon]):
             return jsonify({"error": "필수 파라미터가 누락되었습니다."}), 400
@@ -1391,11 +1410,22 @@ def api_call_hospital():
     
     try:
         data = request.get_json()
-        request_id = data.get('request_id', type=int)
+        if not data:
+            return jsonify({"error": "요청 데이터가 없습니다."}), 400
+        
+        request_id = data.get('request_id')
         hospital_id = data.get('hospital_id')  # hpid
-        distance_km = data.get('distance_km', type=float)
-        eta_min = data.get('eta_minutes', type=int)
+        distance_km = data.get('distance_km')
+        eta_min = data.get('eta_minutes')
         twilio_sid = data.get('twilio_sid')  # Twilio Call SID (선택)
+        
+        # 타입 변환
+        if request_id is not None:
+            request_id = int(request_id)
+        if distance_km is not None:
+            distance_km = float(distance_km)
+        if eta_min is not None:
+            eta_min = int(eta_min)
         
         if not all([request_id, hospital_id]):
             return jsonify({"error": "request_id와 hospital_id가 필요합니다."}), 400
@@ -1472,9 +1502,16 @@ def api_update_response():
     
     try:
         data = request.get_json()
-        assignment_id = data.get('assignment_id', type=int)
+        if not data:
+            return jsonify({"error": "요청 데이터가 없습니다."}), 400
+        
+        assignment_id = data.get('assignment_id')
         response_status = data.get('response_status')  # '승인' 또는 '거절'
         twilio_sid = data.get('twilio_sid')  # 선택
+        
+        # 타입 변환
+        if assignment_id is not None:
+            assignment_id = int(assignment_id)
         
         if not assignment_id or not response_status:
             return jsonify({"error": "assignment_id와 response_status가 필요합니다."}), 400
@@ -1494,10 +1531,13 @@ def api_update_response():
         assignment.responded_at = datetime.now()
         
         # 승인된 경우 ChatSession 생성
+        chat_session = None
         if response_status == '승인':
             # 기존 세션이 있는지 확인
             existing_session = ChatSession.query.filter_by(request_id=assignment.request_id).first()
-            if not existing_session:
+            if existing_session:
+                chat_session = existing_session
+            else:
                 chat_session = ChatSession(
                     request_id=assignment.request_id,
                     assignment_id=assignment_id,
@@ -1507,11 +1547,19 @@ def api_update_response():
         
         db.session.commit()
         
-        return jsonify({
+        # ChatSession이 생성되었으면 session_id도 반환
+        response_data = {
             "assignment_id": assignment.assignment_id,
             "response_status": assignment.response_status,
             "responded_at": assignment.responded_at.isoformat() if assignment.responded_at else None
-        }), 200
+        }
+        
+        if chat_session:
+            response_data["session_id"] = chat_session.session_id
+            response_data["request_id"] = chat_session.request_id
+            response_data["assignment_id"] = chat_session.assignment_id
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         db.session.rollback()
@@ -1711,6 +1759,111 @@ def api_get_assignments():
         error_detail = traceback.format_exc()
         print(f"RequestAssignment 조회 오류: {error_detail}")
         return jsonify({"error": f"RequestAssignment 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+
+# ChatSession 조회 API
+@app.route('/api/chat/session', methods=['GET'])
+def api_get_chat_session():
+    """ChatSession 조회 (request_id 또는 assignment_id로)"""
+    try:
+        request_id = request.args.get('request_id', type=int)
+        assignment_id = request.args.get('assignment_id', type=int)
+        
+        if not request_id and not assignment_id:
+            return jsonify({"error": "request_id 또는 assignment_id 파라미터가 필요합니다."}), 400
+        
+        session = None
+        if request_id:
+            session = ChatSession.query.filter_by(request_id=request_id).first()
+        elif assignment_id:
+            session = ChatSession.query.filter_by(assignment_id=assignment_id).first()
+        
+        if not session:
+            return jsonify({"error": "채팅 세션을 찾을 수 없습니다."}), 404
+        
+        return jsonify({
+            "session_id": session.session_id,
+            "request_id": session.request_id,
+            "assignment_id": session.assignment_id,
+            "started_at": session.started_at.isoformat() if session.started_at else None,
+            "ended_at": session.ended_at.isoformat() if session.ended_at else None
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"ChatSession 조회 오류: {error_detail}")
+        return jsonify({"error": f"ChatSession 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+
+# ChatSession 목록 조회 API (응급실 대시보드용)
+@app.route('/api/chat/sessions', methods=['GET'])
+def api_get_chat_sessions():
+    """ChatSession 목록 조회 (hospital_id로 필터링 가능)"""
+    try:
+        hospital_id = request.args.get('hospital_id')
+        
+        # hospital_id가 있으면 해당 병원의 ChatSession만 조회
+        if hospital_id:
+            # RequestAssignment를 통해 hospital_id로 필터링
+            assignments = RequestAssignment.query.filter_by(
+                hospital_id=hospital_id,
+                response_status='승인'
+            ).all()
+            assignment_ids = [a.assignment_id for a in assignments]
+            
+            if not assignment_ids:
+                return jsonify({"sessions": []}), 200
+            
+            sessions = ChatSession.query.filter(
+                ChatSession.assignment_id.in_(assignment_ids)
+            ).order_by(ChatSession.started_at.desc()).all()
+        else:
+            # 모든 ChatSession 조회
+            sessions = ChatSession.query.order_by(ChatSession.started_at.desc()).limit(100).all()
+        
+        result = []
+        for session in sessions:
+            # 관련 정보 조회
+            assignment = RequestAssignment.query.get(session.assignment_id)
+            emergency_request = EmergencyRequest.query.get(session.request_id)
+            ems_team = None
+            hospital = None
+            
+            if emergency_request:
+                ems_team = EMSTeam.query.get(emergency_request.team_id)
+            if assignment:
+                hospital = Hospital.query.filter_by(hospital_id=assignment.hospital_id).first()
+            
+            # 최신 메시지 조회
+            latest_message = ChatMessage.query.filter_by(
+                session_id=session.session_id
+            ).order_by(ChatMessage.sent_at.desc()).first()
+            
+            result.append({
+                "session_id": session.session_id,
+                "request_id": session.request_id,
+                "assignment_id": session.assignment_id,
+                "started_at": session.started_at.isoformat() if session.started_at else None,
+                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "ems_id": ems_team.ems_id if ems_team else None,
+                "hospital_name": hospital.name if hospital else None,
+                "patient_age": emergency_request.patient_age if emergency_request else None,
+                "patient_sex": emergency_request.patient_sex if emergency_request else None,
+                "pre_ktas_class": emergency_request.pre_ktas_class if emergency_request else None,
+                "rag_summary": emergency_request.rag_summary if emergency_request else None,
+                "latest_message": {
+                    "content": latest_message.content if latest_message else None,
+                    "sent_at": latest_message.sent_at.isoformat() if latest_message and latest_message.sent_at else None,
+                    "sender_type": latest_message.sender_type if latest_message else None
+                } if latest_message else None
+            })
+        
+        return jsonify({"sessions": result}), 200
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"ChatSession 목록 조회 오류: {error_detail}")
+        return jsonify({"error": f"ChatSession 목록 조회 중 오류가 발생했습니다: {str(e)}"}), 500
 
 # 채팅 메시지 API
 @app.route('/api/chat/messages', methods=['GET', 'POST'])
