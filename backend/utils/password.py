@@ -33,3 +33,4 @@ def verify_password(password: str, password_hash: str) -> bool:
     """
     return check_password_hash(password_hash, password)
 
+

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, ChangeEvent } from "react";
 import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital, Coords } from "../types";
 import { MapDisplay } from "./MapDisplay";
+import { getChatMessages, sendChatMessage } from "../services/api";
 
 interface ParamedicChatSlideOverProps {
   isOpen: boolean;
@@ -37,14 +38,46 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [confirmCode, setConfirmCode] = useState("");
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const initialMessageSentRef = useRef<boolean>(false);
 
   useEffect(() => {
     setLocalSession(session);
   }, [session]);
 
-  // 초기 메시지 생성 (환자 정보가 있을 때) - 원본 코드 구조 반영
+  // DB에서 기존 메시지 로드
   useEffect(() => {
-    if (isOpen && messages.length === 0 && sttText) {
+    if (isOpen && localSession.sessionId) {
+      const loadMessages = async () => {
+        try {
+          // 기존 메시지 로드
+          const dbMessages = await getChatMessages(localSession.sessionId!);
+          const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
+            id: `msg-${msg.message_id}`,
+            role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
+            content: msg.content,
+            imageUrl: msg.image_url,
+            sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
+          }));
+          
+          setMessages(formattedMessages);
+        } catch (error) {
+          console.error("메시지 로드 실패:", error);
+        }
+      };
+      
+      // 초기 로드
+      loadMessages();
+      
+      // 메시지 자동 새로고침 (3초마다 - 양방향 통신)
+      const interval = setInterval(() => {
+        if (localSession.sessionId) {
+          loadMessages();
+        }
+      }, 3000);
+      
+      return () => clearInterval(interval);
+    } else if (isOpen && messages.length === 0 && sttText) {
+      // sessionId가 없으면 초기 메시지만 로컬에 표시
       const now = new Date();
       const initialMessages: ChatMessage[] = [
         {
@@ -56,7 +89,77 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
       ];
       setMessages(initialMessages);
     }
-  }, [isOpen, sttText]);
+  }, [isOpen, localSession.sessionId]);
+  
+  // 초기 메시지 전송 (sessionId가 있고 sttText가 있을 때 한 번만)
+  useEffect(() => {
+    if (!isOpen || !localSession.sessionId || !sttText) return;
+    if (initialMessageSentRef.current) return;
+    
+    const sendInitialMessage = async () => {
+      // 이미 전송 중이면 리턴
+      if (initialMessageSentRef.current) return;
+      
+      // 플래그를 먼저 설정하여 중복 실행 방지
+      initialMessageSentRef.current = true;
+      
+      // 기존 메시지 확인
+      try {
+        const dbMessages = await getChatMessages(localSession.sessionId!);
+        // 이미 메시지가 있으면 초기 메시지 전송 안 함
+        if (dbMessages.length > 0) {
+          console.log("기존 메시지가 있어 초기 메시지 전송 건너뜀");
+          return;
+        }
+      } catch (error) {
+        console.error("기존 메시지 확인 실패:", error);
+        initialMessageSentRef.current = false; // 에러 시 플래그 리셋
+        return;
+      }
+      
+      const initialContent = `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${sttText}`;
+      try {
+        console.log("초기 메시지 전송 시도:", {
+          sessionId: localSession.sessionId,
+          senderType: "EMS",
+          senderRefId: PARAMEDIC_ID,
+          content: initialContent,
+        });
+        
+        const savedMessage = await sendChatMessage(
+          localSession.sessionId!,
+          "EMS",
+          PARAMEDIC_ID,
+          initialContent
+        );
+        
+        console.log("초기 메시지 저장 성공:", savedMessage);
+        
+        // 메시지 목록 다시 로드
+        const dbMessages = await getChatMessages(localSession.sessionId!);
+        const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
+          id: `msg-${msg.message_id}`,
+          role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
+          content: msg.content,
+          imageUrl: msg.image_url,
+          sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
+        }));
+        setMessages(formattedMessages);
+      } catch (error) {
+        console.error("초기 메시지 저장 실패:", error);
+        initialMessageSentRef.current = false; // 에러 시 플래그 리셋하여 재시도 가능
+      }
+    };
+    
+    sendInitialMessage();
+  }, [isOpen, localSession.sessionId, sttText]);
+  
+  // 세션이 변경되면 초기 메시지 전송 플래그 리셋
+  useEffect(() => {
+    if (localSession.sessionId) {
+      initialMessageSentRef.current = false;
+    }
+  }, [localSession.sessionId]);
 
   const handleChangeFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -74,7 +177,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     setDraftImage(undefined);
   };
 
-  const handleSendFromParamedic = () => {
+  const handleSendFromParamedic = async () => {
     const text = draftText.trim();
     if (!text && !draftImage) return;
 
@@ -86,9 +189,51 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
       sentAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
     };
 
+    // 로컬 상태에 먼저 추가 (즉시 UI 업데이트)
     setMessages((prev) => [...prev, newMessage]);
     setDraftText("");
     handleClearImage();
+
+    // DB에 저장 (sessionId가 있을 때만)
+    if (localSession.sessionId) {
+      try {
+        console.log("메시지 전송 시도:", {
+          sessionId: localSession.sessionId,
+          senderType: "EMS",
+          senderRefId: PARAMEDIC_ID,
+          content: text,
+        });
+        const savedMessage = await sendChatMessage(
+          localSession.sessionId,
+          "EMS",
+          PARAMEDIC_ID,
+          text,
+          draftImage ? undefined : undefined // TODO: 이미지 업로드 처리 필요
+        );
+        console.log("메시지 저장 성공:", savedMessage);
+        // DB에서 저장된 메시지로 업데이트
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === newMessage.id
+              ? {
+                  ...msg,
+                  id: `msg-${savedMessage.message_id}`,
+                  sentAt: new Date(savedMessage.sent_at).toLocaleTimeString("ko-KR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                  }),
+                }
+              : msg
+          )
+        );
+      } catch (error) {
+        console.error("메시지 저장 실패:", error);
+        // 실패해도 로컬 메시지는 유지
+      }
+    } else {
+      console.warn("sessionId가 없어 메시지를 DB에 저장할 수 없습니다. localSession:", localSession);
+    }
   };
 
   const handleOpenConfirmModal = () => {
