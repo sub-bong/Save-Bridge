@@ -14,6 +14,9 @@ const getApiBaseUrl = (): string => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+// axios 기본 설정 (쿠키 포함)
+axios.defaults.withCredentials = true;
+
 // 주소 → 좌표 변환
 export const addressToCoord = async (address: string): Promise<{ lat: number; lon: number; sido?: string; sigungu?: string } | null> => {
   if (!address.trim()) {
@@ -205,7 +208,7 @@ export const getRoute = async (
   originLon: number,
   destLat: number,
   destLon: number
-): Promise<{ path_coords?: number[][] } | null> => {
+): Promise<{ path_coords?: number[][]; distance_km?: number; eta_minutes?: number } | null> => {
   try {
     const res = await axios.get(`${API_BASE_URL}/api/geo/route`, {
       params: {
@@ -218,6 +221,47 @@ export const getRoute = async (
     return res.data || null;
   } catch (error: any) {
     console.error("경로 조회 실패:", error);
+    return null;
+  }
+};
+
+// 인증 API
+export const login = async (emsId: string, password: string): Promise<{ team_id: number; ems_id: string; region: string | null }> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+      ems_id: emsId,
+      password: password,
+    }, {
+      withCredentials: true, // 쿠키 포함
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("로그인 실패:", error);
+    throw new Error(error.response?.data?.error || "로그인 중 오류가 발생했습니다.");
+  }
+};
+
+export const logout = async (): Promise<void> => {
+  try {
+    await axios.post(`${API_BASE_URL}/api/auth/logout`, {}, {
+      withCredentials: true,
+    });
+  } catch (error: any) {
+    console.error("로그아웃 실패:", error);
+  }
+};
+
+export const getCurrentUser = async (): Promise<{ team_id: number; ems_id: string; region: string | null } | null> => {
+  try {
+    const res = await axios.get(`${API_BASE_URL}/api/auth/me`, {
+      withCredentials: true,
+    });
+    return res.data;
+  } catch (error: any) {
+    if (error.response?.status === 401) {
+      return null; // 로그인되지 않음
+    }
+    console.error("사용자 정보 조회 실패:", error);
     return null;
   }
 };

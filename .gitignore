@@ -46,6 +46,13 @@ Thumbs.db
 .react_pid
 stt_history.txt
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+backend/instance/
+site.db
+
 # Temporary files
 *.tmp
 *.temp
