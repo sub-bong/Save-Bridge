@@ -396,11 +396,14 @@ export const SafeBridgeApp: React.FC = () => {
       }
       await fetchRoutePaths(uniqueHospitals, { updateDistances: true });
 
-      if (uniqueHospitals.length > 0) {
-        setTwilioAutoCalling(true);
-      } else {
-        setTwilioAutoCalling(false);
-      }
+      // [자동 전화 기능 - 필요시 주석 해제]
+      // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
+      // if (uniqueHospitals.length > 0) {
+      //   setTwilioAutoCalling(true); // Start auto-calling
+      // } else {
+      //   setTwilioAutoCalling(false);
+      // }
+      setTwilioAutoCalling(false); // 테스트 환경: 자동 전화 비활성화
     } catch (error: any) {
       console.error("병원 조회 오류:", error);
       alert(error.message || "병원 조회 중 오류가 발생했습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
@@ -682,6 +685,8 @@ export const SafeBridgeApp: React.FC = () => {
     return pieces.filter(Boolean).join(" ");
   };
 
+  // [실제 Twilio 전화 기능 - 필요시 주석 해제하여 사용]
+  // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
   const handleStartTwilioCall = async (hospital: Hospital) => {
     // 모든 자동 전화는 지정된 안전 테스트 번호로 우회
     try {
@@ -768,26 +773,27 @@ export const SafeBridgeApp: React.FC = () => {
   }, [hospitals, activeCalls, hospitalApprovalStatus]);
 
 
-  // Twilio 자동 전화 로직
-  useEffect(() => {
-    if (!twilioAutoCalling || approvedHospital || currentHospitalIndex >= hospitals.length) {
-      return;
-    }
-
-    const currentHospital = hospitals[currentHospitalIndex];
-    if (!currentHospital) return;
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    if (!activeCalls[currentHospital.hpid || ""]) {
-      timer = setTimeout(() => {
-        handleStartTwilioCall(currentHospital);
-      }, 10000);
-    }
-    return () => {
-      if (timer) clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital, activeCalls]);
+  // [자동 전화 기능 - 필요시 주석 해제]
+  // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
+  // useEffect(() => {
+  //   if (!twilioAutoCalling || approvedHospital || currentHospitalIndex >= hospitals.length) {
+  //     return;
+  //   }
+  //
+  //   const currentHospital = hospitals[currentHospitalIndex];
+  //   if (!currentHospital) return;
+  //
+  //   let timer: ReturnType<typeof setTimeout> | null = null;
+  //   if (!activeCalls[currentHospital.hpid || ""]) {
+  //     timer = setTimeout(() => {
+  //       handleStartTwilioCall(currentHospital);
+  //     }, 10000);
+  //   }
+  //   return () => {
+  //     if (timer) clearTimeout(timer);
+  //   };
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital, activeCalls]);
 
   useEffect(() => {
     if (twilioAutoCalling && !hasCallableHospital) {
