@@ -32,7 +32,8 @@ Save-Bridge/
 │   └── ...
 │
 └── scripts/             # 실행 스크립트
-    └── start_all.sh     # 전체 서비스 실행
+    ├── start_all.sh     # 전체 서비스 실행 (구급대원 앱)
+    └── start_er_dashboard.sh  # 응급실 대시보드 실행
 ```
 
 ## 빠른 시작
@@ -60,6 +61,23 @@ npm run dev
 ```bash
 bash scripts/start_all.sh
 ```
+
+### 4. 응급실 대시보드 실행
+
+응급실 대시보드를 별도로 실행하려면:
+
+```bash
+bash scripts/start_er_dashboard.sh
+```
+
+이 스크립트는:
+- Flask 서버를 백그라운드로 실행 (포트 5001)
+- React 앱을 응급실 대시보드 모드로 실행 (포트 5173, `?mode=er` 파라미터 포함)
+- 브라우저에서 `http://localhost:5173?mode=er` 자동 열기
+
+**참고:**
+- 구급대원 앱과 응급실 대시보드는 같은 백엔드 API를 공유합니다
+- 두 앱을 동시에 실행하려면 각각 다른 포트에서 실행하거나, 하나의 React 앱에서 URL 파라미터로 모드를 전환할 수 있습니다
 
 ## 🗄️ 데이터베이스 설정
 
@@ -161,6 +179,9 @@ python scripts/seed_data.py
 - `/api/emergency/request` - 응급실 입실 요청 생성
 - `/api/emergency/call-hospital` - 병원에 전화 걸기 및 RequestAssignment 생성
 - `/api/emergency/update-response` - 병원 응답 상태 업데이트 (승인/거절)
+- `/api/chat/session` - ChatSession 조회 (request_id 또는 assignment_id로)
+- `/api/chat/sessions` - ChatSession 목록 조회 (응급실 대시보드용)
+- `/api/chat/messages` - 채팅 메시지 조회(GET) 및 전송(POST)
 
 ### Frontend 기능
 - 실시간 위치 기반 병원 검색
@@ -168,6 +189,7 @@ python scripts/seed_data.py
 - 병원 정보 카드 및 지도 표시
 - 음성 입력 지원 (STT)
 - 구급대원 채팅 인터페이스
+- 응급실 대시보드 (양방향 채팅 지원)
 
 ## 환경 변수 설정
 

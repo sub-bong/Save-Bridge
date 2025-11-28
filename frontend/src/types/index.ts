@@ -77,6 +77,9 @@ export interface HospitalHandoverSummary {
   hospitalName: string;
   regionLabel: string;
   status: HandoverStatus;
+  sessionId?: number; // 실제 DB의 ChatSession session_id (optional)
+  requestId?: number; // EmergencyRequest request_id (optional)
+  assignmentId?: number; // RequestAssignment assignment_id (optional)
 }
 
 export interface ChatMessage {
