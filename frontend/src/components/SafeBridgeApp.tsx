@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { Coords, Region, Hospital, ApprovalStatus, HospitalHandoverSummary, PatientTransportMeta } from "../types";
 import { symptomOptions } from "../constants";
-import { addressToCoord, coordToAddress, coordToRegion, searchHospitals, transcribeAudio, makeCall, getCallResponse, getRoute, logout, getCurrentUser } from "../services/api";
+import { addressToCoord, coordToAddress, coordToRegion, searchHospitals, transcribeAudio, makeCall, getCallResponse, getRoute, logout, getCurrentUser, getChatSession, createEmergencyRequest, callHospital, updateResponseStatus } from "../services/api";
 import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel } from "../utils/hospitalUtils";
 import { LocationInput } from "./LocationInput";
 import { PatientStatusInput, CRITICAL_PRESETS } from "./PatientStatusInput";
@@ -48,6 +48,7 @@ export const SafeBridgeApp: React.FC = () => {
   const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
   const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<{ team_id: number; ems_id: string; region: string | null } | null>(null);
+  const [currentRequestId, setCurrentRequestId] = useState<number | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -396,6 +397,31 @@ export const SafeBridgeApp: React.FC = () => {
       }
       await fetchRoutePaths(uniqueHospitals, { updateDistances: true });
 
+      // EmergencyRequest 생성 (DB에 저장)
+      if (currentUser && uniqueHospitals.length > 0) {
+        try {
+          const patientAge = extractPatientAge(patientAgeBand);
+          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
+          const preKtasLevel = extractPreKtasLevel(symptom, sttText);
+          
+          const emergencyRequest = await createEmergencyRequest({
+            team_id: currentUser.team_id,
+            patient_sex: patientSexValue,
+            patient_age: patientAge || 30, // 기본값
+            pre_ktas_class: preKtasLevel || "3",
+            stt_full_text: sttText || null,
+            rag_summary: sbarText || null,
+            current_lat: coords.lat!,
+            current_lon: coords.lon!,
+          });
+          setCurrentRequestId(emergencyRequest.request_id);
+          console.log("EmergencyRequest 생성됨:", emergencyRequest.request_id);
+        } catch (error) {
+          console.error("EmergencyRequest 생성 실패:", error);
+          // 실패해도 계속 진행
+        }
+      }
+
       // [자동 전화 기능 - 필요시 주석 해제]
       // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
       // if (uniqueHospitals.length > 0) {
@@ -613,8 +639,10 @@ export const SafeBridgeApp: React.FC = () => {
     };
   }, [cleanupAudioVisualization]);
 
-  const handleApproveHospital = (hospital: Hospital) => {
+  const handleApproveHospital = async (hospital: Hospital) => {
     const approvedId = hospital.hpid || "";
+    
+    // 프론트엔드 상태 업데이트
     setHospitalApprovalStatus(() => {
       const nextStatuses: Record<string, ApprovalStatus> = {};
       hospitals.forEach((h) => {
@@ -630,20 +658,171 @@ export const SafeBridgeApp: React.FC = () => {
     setApprovedHospital(hospital);
     setTwilioAutoCalling(false);
     setActiveCalls({});
-    // 승인 후 채팅 패널 자동으로 열기
-    handleOpenChat(hospital);
+    
+    // DB에 RequestAssignment 생성 및 승인 상태 업데이트
+    if (!hospital.hpid) {
+      console.warn("hospital.hpid가 없어 병원 승인을 처리할 수 없습니다.");
+      handleOpenChat(hospital);
+      return;
+    }
+    
+    try {
+      let requestId = currentRequestId;
+      
+      // EmergencyRequest가 없으면 먼저 생성
+      if (!requestId && currentUser) {
+        console.log("EmergencyRequest가 없어서 먼저 생성합니다...");
+        try {
+          const patientAge = extractPatientAge(patientAgeBand);
+          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
+          const preKtasLevel = extractPreKtasLevel(symptom, sttText);
+          
+          if (!coords.lat || !coords.lon) {
+            throw new Error("좌표 정보가 없습니다.");
+          }
+          
+          const emergencyRequest = await createEmergencyRequest({
+            team_id: currentUser.team_id,
+            patient_sex: patientSexValue,
+            patient_age: patientAge || 30, // 기본값
+            pre_ktas_class: preKtasLevel || "3",
+            stt_full_text: sttText || null,
+            rag_summary: sbarText || null,
+            current_lat: coords.lat,
+            current_lon: coords.lon,
+          });
+          requestId = emergencyRequest.request_id;
+          setCurrentRequestId(requestId);
+          console.log("EmergencyRequest 생성됨:", requestId);
+        } catch (error) {
+          console.error("EmergencyRequest 생성 실패:", error);
+          // EmergencyRequest 생성 실패해도 채팅 패널은 열기 (로컬 모드)
+          handleOpenChat(hospital);
+          return;
+        }
+      }
+      
+      if (!requestId) {
+        console.warn("EmergencyRequest를 생성할 수 없어 로컬 모드로 진행합니다.");
+        handleOpenChat(hospital);
+        return;
+      }
+      
+      console.log("병원 승인 시작:", {
+        request_id: requestId,
+        hospital_id: hospital.hpid,
+        hospital_name: hospital.dutyName,
+      });
+      
+      // RequestAssignment 생성
+      const assignment = await callHospital({
+        request_id: requestId,
+        hospital_id: hospital.hpid,
+        distance_km: typeof hospital.distance_km === "number" ? hospital.distance_km : 
+                    typeof hospital.distance_km === "string" ? parseFloat(hospital.distance_km) : undefined,
+        eta_minutes: hospital.eta_minutes,
+      });
+      
+      console.log("RequestAssignment 생성됨:", assignment.assignment_id, assignment);
+      
+      // 승인 상태 업데이트 (ChatSession 자동 생성됨)
+      const updated = await updateResponseStatus({
+        assignment_id: assignment.assignment_id,
+        response_status: "승인",
+      });
+      
+      console.log("병원 승인 완료, 응답 상태:", updated);
+      
+      // 응답에 session_id가 포함되어 있으면 바로 사용
+      if (updated.session_id) {
+        console.log("ChatSession이 응답에 포함됨:", updated.session_id);
+        // 채팅 패널 열기 (실제 DB sessionId 포함)
+        handleOpenChat(hospital, updated.session_id, updated.request_id || requestId, updated.assignment_id || assignment.assignment_id);
+      } else {
+        // session_id가 없으면 조회 시도 (여러 번 시도)
+        console.log("응답에 session_id가 없어서 조회 시도...");
+        let dbSession = null;
+        for (let i = 0; i < 5; i++) {
+          dbSession = await getChatSession(requestId, assignment.assignment_id);
+          if (dbSession) {
+            console.log("ChatSession 조회 성공:", dbSession);
+            break;
+          }
+          console.log(`ChatSession 조회 시도 ${i + 1}/5 실패, 1초 후 재시도...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        if (dbSession) {
+          // 채팅 패널 열기 (실제 DB sessionId 포함)
+          handleOpenChat(hospital, dbSession.session_id, requestId, assignment.assignment_id);
+        } else {
+          console.warn("ChatSession을 찾을 수 없지만 채팅 패널은 열기");
+          // ChatSession이 없어도 채팅 패널은 열기
+          handleOpenChat(hospital, undefined, requestId, assignment.assignment_id);
+        }
+      }
+    } catch (error) {
+      console.error("병원 승인 처리 실패:", error);
+      // 실패해도 채팅 패널은 열기
+      handleOpenChat(hospital);
+    }
   };
 
-  const handleOpenChat = (hospital: Hospital) => {
+  const handleOpenChat = async (
+    hospital: Hospital,
+    dbSessionId?: number,
+    requestId?: number,
+    assignmentId?: number
+  ) => {
     // 채팅 슬라이드 패널 열기
     if (hospital.hpid && hospital.dutyName) {
       const sessionId = `session-${hospital.hpid}-${Date.now()}`;
       const regionLabel = hospital.dutyEmclsName || hospital.dutyDivNam || "응급의료기관";
+      
+      // 실제 DB의 ChatSession 조회 시도
+      let finalSessionId: number | undefined = dbSessionId;
+      const finalRequestId = requestId || currentRequestId;
+      const finalAssignmentId = assignmentId;
+      
+      // sessionId가 없고 requestId나 assignmentId가 있으면 조회 시도
+      if (!finalSessionId && (finalRequestId || finalAssignmentId)) {
+        console.log("ChatSession 조회 시도:", { finalRequestId, finalAssignmentId });
+        try {
+          // 여러 번 시도 (최대 5번)
+          for (let i = 0; i < 5; i++) {
+            const dbSession = await getChatSession(finalRequestId, finalAssignmentId);
+            if (dbSession) {
+              finalSessionId = dbSession.session_id;
+              console.log("ChatSession 조회 성공:", finalSessionId);
+              break;
+            }
+            if (i < 4) {
+              console.log(`ChatSession 조회 시도 ${i + 1}/5 실패, 1초 후 재시도...`);
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+          if (!finalSessionId) {
+            console.warn("ChatSession을 찾을 수 없습니다. 로컬 모드로 진행합니다.");
+          }
+        } catch (error) {
+          console.error("ChatSession 조회 실패:", error);
+        }
+      }
+      
+      console.log("채팅 패널 열기:", {
+        sessionId: finalSessionId,
+        requestId: finalRequestId,
+        assignmentId: finalAssignmentId,
+      });
+      
       setChatSession({
         id: sessionId,
         hospitalName: hospital.dutyName,
         regionLabel: regionLabel,
         status: "ONGOING",
+        sessionId: finalSessionId,
+        requestId: finalRequestId || undefined,
+        assignmentId: finalAssignmentId || undefined,
       });
       setIsChatOpen(true);
     }
