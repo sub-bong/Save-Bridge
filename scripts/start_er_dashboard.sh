@@ -54,7 +54,7 @@ if [ $? -ne 0 ]; then
 fi
 
 cd backend
-nohup python3 app.py > ../logs/flask_server.log 2>&1 &
+nohup python app.py > ../logs/flask_server.log 2>&1 &
 cd ..
 FLASK_PID=$!
 echo "    Flask PID: $FLASK_PID"

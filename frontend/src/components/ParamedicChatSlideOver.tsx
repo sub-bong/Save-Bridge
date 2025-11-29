@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, ChangeEvent } from "react";
 import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital, Coords } from "../types";
-import { MapDisplay } from "./MapDisplay";
+// import { MapDisplay } from "./MapDisplay";
 import { getChatMessages, sendChatMessage } from "../services/api";
+import { KakaoAmbulanceMap } from "./KakaoAmbulanceMap";
 
 interface ParamedicChatSlideOverProps {
   isOpen: boolean;
@@ -13,7 +14,7 @@ interface ParamedicChatSlideOverProps {
   onHandoverComplete: (sessionId: string) => void;
   mapCoords: Coords;
   mapRoutePaths: Record<string, number[][]>;
-  resolveHospitalColor: (hospital: Hospital, index: number) => string;
+  // resolveHospitalColor: (hospital: Hospital, index: number) => string;
 }
 
 const PARAMEDIC_ID = "A100"; // 구급대원 식별코드 (실제로는 설정에서 가져올 수 있음)
@@ -28,7 +29,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   onHandoverComplete,
   mapCoords,
   mapRoutePaths,
-  resolveHospitalColor,
+  // resolveHospitalColor,
 }) => {
   const [localSession, setLocalSession] = useState<HospitalHandoverSummary>(session);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -58,23 +59,23 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
             imageUrl: msg.image_url,
             sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
           }));
-          
+
           setMessages(formattedMessages);
         } catch (error) {
           console.error("메시지 로드 실패:", error);
         }
       };
-      
+
       // 초기 로드
       loadMessages();
-      
+
       // 메시지 자동 새로고침 (3초마다 - 양방향 통신)
       const interval = setInterval(() => {
         if (localSession.sessionId) {
           loadMessages();
         }
       }, 3000);
-      
+
       return () => clearInterval(interval);
     } else if (isOpen && messages.length === 0 && sttText) {
       // sessionId가 없으면 초기 메시지만 로컬에 표시
@@ -90,19 +91,19 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
       setMessages(initialMessages);
     }
   }, [isOpen, localSession.sessionId]);
-  
+
   // 초기 메시지 전송 (sessionId가 있고 sttText가 있을 때 한 번만)
   useEffect(() => {
     if (!isOpen || !localSession.sessionId || !sttText) return;
     if (initialMessageSentRef.current) return;
-    
+
     const sendInitialMessage = async () => {
       // 이미 전송 중이면 리턴
       if (initialMessageSentRef.current) return;
-      
+
       // 플래그를 먼저 설정하여 중복 실행 방지
       initialMessageSentRef.current = true;
-      
+
       // 기존 메시지 확인
       try {
         const dbMessages = await getChatMessages(localSession.sessionId!);
@@ -116,7 +117,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
         initialMessageSentRef.current = false; // 에러 시 플래그 리셋
         return;
       }
-      
+
       const initialContent = `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${sttText}`;
       try {
         console.log("초기 메시지 전송 시도:", {
@@ -125,16 +126,11 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           senderRefId: PARAMEDIC_ID,
           content: initialContent,
         });
-        
-        const savedMessage = await sendChatMessage(
-          localSession.sessionId!,
-          "EMS",
-          PARAMEDIC_ID,
-          initialContent
-        );
-        
+
+        const savedMessage = await sendChatMessage(localSession.sessionId!, "EMS", PARAMEDIC_ID, initialContent);
+
         console.log("초기 메시지 저장 성공:", savedMessage);
-        
+
         // 메시지 목록 다시 로드
         const dbMessages = await getChatMessages(localSession.sessionId!);
         const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
@@ -150,10 +146,10 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
         initialMessageSentRef.current = false; // 에러 시 플래그 리셋하여 재시도 가능
       }
     };
-    
+
     sendInitialMessage();
   }, [isOpen, localSession.sessionId, sttText]);
-  
+
   // 세션이 변경되면 초기 메시지 전송 플래그 리셋
   useEffect(() => {
     if (localSession.sessionId) {
@@ -291,9 +287,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-slate-900">{localSession.hospitalName} 응급실과의 인계 채팅</span>
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700">
-                {statusLabel}
-              </span>
+              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700">{statusLabel}</span>
             </div>
             <div className="mt-1 text-xs text-slate-500">병원 분류: {localSession.regionLabel}</div>
           </div>
@@ -333,7 +327,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   onClick={handleClickAttach}
                   className="h-10 px-3 rounded-xl border border-slate-300 bg-slate-50 text-xs text-slate-700 hover:bg-slate-100 flex items-center gap-1"
                 >
-                  <span className="inline-block w-4 h-4 rounded-full border border-slate-400 flex items-center justify-center text-[10px]">+</span>
+                  <span className=" w-4 h-4 rounded-full border border-slate-400 flex items-center justify-center text-[10px]">+</span>
                   사진/이미지 첨부
                 </button>
                 <div className="flex-1">
@@ -371,15 +365,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   <span className="text-[10px] text-slate-500">구급차 기준</span>
                 </div>
                 {hospital ? (
-                  <MapDisplay
-                    coords={mapCoords}
-                    hospitals={[hospital]}
-                    routePaths={mapRoutePaths}
-                    approvedHospital={hospital}
-                    resolveHospitalColor={resolveHospitalColor}
-                    compact
-                    compactHeightClass="h-[240px]"
-                  />
+                  <KakaoAmbulanceMap coords={mapCoords} hospitals={[hospital]} routePath={mapRoutePaths[hospital.hpid || ""] || []} tickMs={800} />
                 ) : (
                   <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
                     <div>표시할 병원 정보가 없습니다.</div>
@@ -392,17 +378,11 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   <span className="text-xs text-slate-500">{patientMeta.lastUpdated || "업데이트 중"}</span>
                 </div>
                 <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-semibold text-slate-900">
-                    {patientMeta.etaMinutes !== undefined ? patientMeta.etaMinutes : "-"}
-                  </span>
+                  <span className="text-2xl font-semibold text-slate-900">{patientMeta.etaMinutes !== undefined ? patientMeta.etaMinutes : "-"}</span>
                   <span className="text-xs text-slate-600">분 후 도착 예상</span>
                 </div>
-                <div className="mt-1 text-xs text-slate-600">
-                  남은 거리 약 {patientMeta.distanceKm !== undefined ? patientMeta.distanceKm.toFixed(1) : "-"} km
-                </div>
-                <div className="mt-2 text-xs text-slate-600">
-                  이 화면에서는 이송 중 환자의 남은 거리와 예상 도착 시간을 한눈에 볼 수 있도록 간단한 요약 정보만 표시합니다.
-                </div>
+                <div className="mt-1 text-xs text-slate-600">남은 거리 약 {patientMeta.distanceKm !== undefined ? patientMeta.distanceKm.toFixed(1) : "-"} km</div>
+                <div className="mt-2 text-xs text-slate-600">이 화면에서는 이송 중 환자의 남은 거리와 예상 도착 시간을 한눈에 볼 수 있도록 간단한 요약 정보만 표시합니다.</div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700">
                 <div className="font-semibold mb-2">환자 정보 / 인계 체크 포인트</div>
@@ -475,9 +455,7 @@ const ParamedicMessageBubble: React.FC<ParamedicMessageBubbleProps> = ({ message
         {message.imageUrl && (
           <div className="mt-2">
             <img src={message.imageUrl} alt="구급대원 전송 이미지" className="rounded-xl border border-slate-200 w-full max-h-64 object-cover" />
-            {isParamedic && (
-              <p className="mt-1 text-[10px] opacity-70">실제 서비스에서는 의료정보 보호를 위해 암호화와 접근 권한 제어가 필요합니다.</p>
-            )}
+            {isParamedic && <p className="mt-1 text-[10px] opacity-70">실제 서비스에서는 의료정보 보호를 위해 암호화와 접근 권한 제어가 필요합니다.</p>}
           </div>
         )}
       </div>
@@ -496,15 +474,7 @@ interface HandoverConfirmModalProps {
   onConfirm: () => void;
 }
 
-const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
-  isOpen,
-  paramedicId,
-  confirmCode,
-  errorMessage,
-  onChangeCode,
-  onClose,
-  onConfirm,
-}) => {
+const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({ isOpen, paramedicId, confirmCode, errorMessage, onChangeCode, onClose, onConfirm }) => {
   if (!isOpen) return null;
 
   return (
@@ -528,11 +498,7 @@ const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
           {errorMessage && <p className="mt-1 text-xs text-red-600">{errorMessage}</p>}
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-full text-xs border border-slate-300 text-slate-700 bg-white hover:bg-slate-50"
-          >
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-full text-xs border border-slate-300 text-slate-700 bg-white hover:bg-slate-50">
             취소
           </button>
           <button
@@ -547,4 +513,3 @@ const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
     </div>
   );
 };
-
