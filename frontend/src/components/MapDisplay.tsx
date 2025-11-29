@@ -52,7 +52,7 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
     // 구급대원 위치 마커 (사람 아이콘)
     const personIcon = L.divIcon({
       className: "custom-person-icon",
-      html: '<div style="width: 30px; height: 30px; background-color: #2563eb; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: bold; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">P</div>',
+      html: '<div style="width: 30px; height: 30px; background-color: #1e293b; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: bold; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">P</div>',
       iconSize: [30, 30],
       iconAnchor: [15, 15],
     });

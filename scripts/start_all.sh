@@ -14,14 +14,53 @@ cd "$PROJECT_ROOT"
 # logs 디렉토리 생성
 mkdir -p logs
 
-# 기존 프로세스 정리
-echo " 기존 프로세스 정리 중..."
-pkill -f "backend/app.py" 2>/dev/null
-pkill -f "app.py" 2>/dev/null
-pkill -f "ngrok.*5001" 2>/dev/null
-pkill -f "vite.*5173" 2>/dev/null
-pkill -f "node.*vite" 2>/dev/null
-sleep 2
+# 기존 프로세스 확인 및 정리
+echo " 기존 프로세스 확인 중..."
+
+# 포트 5001 (Flask) 확인
+FLASK_RUNNING=false
+if lsof -ti:5001 > /dev/null 2>&1; then
+    FLASK_PID=$(lsof -ti:5001 | head -1)
+    echo "    Flask 서버가 이미 실행 중입니다 (PID: $FLASK_PID, 포트: 5001)"
+    read -p "    기존 Flask 서버를 종료하고 새로 시작하시겠습니까? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        kill $FLASK_PID 2>/dev/null
+        pkill -f "backend/app.py" 2>/dev/null
+        pkill -f "app.py" 2>/dev/null
+        sleep 2
+        echo "    기존 Flask 서버 종료됨"
+    else
+        FLASK_RUNNING=true
+        echo "    기존 Flask 서버를 유지합니다"
+    fi
+fi
+
+# 포트 5173 (React) 확인
+REACT_RUNNING=false
+if lsof -ti:5173 > /dev/null 2>&1; then
+    REACT_PID=$(lsof -ti:5173 | head -1)
+    echo "    React 앱이 이미 실행 중입니다 (PID: $REACT_PID, 포트: 5173)"
+    read -p "    기존 React 앱을 종료하고 새로 시작하시겠습니까? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        kill $REACT_PID 2>/dev/null
+        pkill -f "vite.*5173" 2>/dev/null
+        pkill -f "node.*vite" 2>/dev/null
+        sleep 2
+        echo "    기존 React 앱 종료됨"
+    else
+        REACT_RUNNING=true
+        echo "    기존 React 앱을 유지합니다"
+    fi
+fi
+
+# ngrok 프로세스 정리 (선택적)
+if pgrep -f "ngrok.*5001" > /dev/null; then
+    echo "    기존 ngrok 프로세스 발견"
+    pkill -f "ngrok.*5001" 2>/dev/null
+    sleep 1
+fi
 
 # Python 가상환경 확인 및 생성
 if [ -d "venv" ]; then
@@ -39,38 +78,44 @@ else
     echo " 가상환경 준비 완료"
 fi
 
-# Flask 서버 백그라운드 실행
-echo ""
-echo " Flask 서버 시작 (포트 5001)..."
-if [ ! -f "backend/app.py" ]; then
-    echo "    backend/app.py 파일을 찾을 수 없습니다."
-    exit 1
-fi
+# Flask 서버 시작 (이미 실행 중이 아니면)
+if [ "$FLASK_RUNNING" = false ]; then
+    echo ""
+    echo " Flask 서버 시작 (포트 5001)..."
+    if [ ! -f "backend/app.py" ]; then
+        echo "    backend/app.py 파일을 찾을 수 없습니다."
+        exit 1
+    fi
 
-# flask-cors 설치 확인
-python3 -c "import flask_cors" 2>/dev/null
-if [ $? -ne 0 ]; then
-    echo "    flask-cors 설치 중..."
-    pip install flask-cors > /dev/null 2>&1
-fi
+    # flask-cors 설치 확인
+    python3 -c "import flask_cors" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "    flask-cors 설치 중..."
+        pip install flask-cors > /dev/null 2>&1
+    fi
 
-cd backend
-nohup python3 app.py > ../logs/flask_server.log 2>&1 &
-cd ..
-FLASK_PID=$!
-echo "    Flask PID: $FLASK_PID"
+    cd backend
+    nohup python3 app.py > ../logs/flask_server.log 2>&1 &
+    cd ..
+    FLASK_PID=$!
+    echo "    Flask PID: $FLASK_PID"
 
-# Flask 서버 준비 대기
-sleep 3
+    # Flask 서버 준비 대기
+    sleep 3
 
-# Flask 서버 확인
-if curl -s http://localhost:5001 > /dev/null; then
-    echo "    Flask 서버 정상 실행 중"
-    echo "    API URL: http://localhost:5001"
+    # Flask 서버 확인
+    if curl -s http://localhost:5001 > /dev/null; then
+        echo "    Flask 서버 정상 실행 중"
+        echo "    API URL: http://localhost:5001"
+    else
+        echo "    Flask 서버 시작 실패"
+        echo "    로그 확인: tail -f logs/flask_server.log"
+        exit 1
+    fi
 else
-    echo "    Flask 서버 시작 실패"
-    echo "    로그 확인: tail -f logs/flask_server.log"
-    exit 1
+    echo ""
+    echo " Flask 서버는 이미 실행 중입니다 (건너뜀)"
+    FLASK_PID=$(lsof -ti:5001 | head -1)
 fi
 
 # ngrok 자동 실행 (Twilio 콜백용)
@@ -154,23 +199,32 @@ if [ ! -d "node_modules" ]; then
     fi
 fi
 
-# React 앱 백그라운드 실행
-echo "React 앱 시작 (포트 5173)..."
-cd "$PROJECT_ROOT/$REACT_DIR"
-nohup npm run dev > ../logs/react_app.log 2>&1 &
-REACT_PID=$!
-echo "    React PID: $REACT_PID"
+# React 앱 시작 (이미 실행 중이 아니면)
+if [ "$REACT_RUNNING" = false ]; then
+    echo ""
+    echo "React 앱 시작 (포트 5173)..."
+    cd "$PROJECT_ROOT/$REACT_DIR"
+    nohup npm run dev > ../logs/react_app.log 2>&1 &
+    REACT_PID=$!
+    echo "    React PID: $REACT_PID"
 
-# React 앱 준비 대기
-sleep 5
+    # React 앱 준비 대기
+    sleep 5
 
-# React 앱 확인
-if curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
-    REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
-    echo "    React 앱 정상 실행 중"
-    echo "    React URL: http://localhost:$REACT_PORT"
+    # React 앱 확인
+    if curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
+        REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
+        echo "    React 앱 정상 실행 중"
+        echo "    React URL: http://localhost:$REACT_PORT"
+    else
+        echo "     React 앱 시작 확인 중... (로그 확인: tail -f logs/react_app.log)"
+        REACT_PORT="5173"
+    fi
 else
-    echo "     React 앱 시작 확인 중... (로그 확인: tail -f logs/react_app.log)"
+    echo ""
+    echo " React 앱은 이미 실행 중입니다 (건너뜀)"
+    REACT_PID=$(lsof -ti:5173 | head -1)
+    REACT_PORT="5173"
 fi
 
 # PID 저장 (종료 시 사용)

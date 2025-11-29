@@ -21,6 +21,7 @@ export const SafeBridgeApp: React.FC = () => {
   const [symptom, setSymptom] = useState<string>("뇌졸중 의심(FAST+)");
   const [sttText, setSttText] = useState<string>("");
   const [sbarText, setSbarText] = useState<string>("");
+  const [arsNarrative, setArsNarrative] = useState<string>("");  // ARS 서비스용 자연스러운 문장
   const [arsSource, setArsSource] = useState<"stt" | "sbar" | null>(null);
   const [inputMode, setInputMode] = useState<"stt" | "critical">("stt");
   const [priorityModes, setPriorityModes] = useState<PriorityMode[]>(["distance"]);
@@ -88,7 +89,7 @@ export const SafeBridgeApp: React.FC = () => {
     setShowLogoutModal(false);
   };
   const hospitalColorPalette = useMemo(
-    () => ["#ef4444", "#f97316", "#f59e0b", "#14b8a6", "#0ea5e9", "#6366f1", "#a855f7", "#ec4899", "#22c55e", "#e11d48", "#10b981", "#94a3b8"],
+    () => ["#1e293b", "#334155", "#475569", "#64748b", "#475569", "#334155", "#1e293b", "#475569", "#64748b", "#334155", "#1e293b", "#475569"],
     []
   );
 
@@ -175,8 +176,8 @@ export const SafeBridgeApp: React.FC = () => {
       }
 
       if (approvedHospital && hospital.hpid === approvedHospital.hpid) {
-        colorMapRef.current[key] = "#16a34a";
-        return "#16a34a";
+        colorMapRef.current[key] = "#059669";
+        return "#059669";
       }
 
       if (!colorMapRef.current[key]) {
@@ -483,9 +484,17 @@ export const SafeBridgeApp: React.FC = () => {
   const handleUploadAudio = async () => {
     if (!audioFile) return;
     try {
-      const text = await transcribeAudio(audioFile);
-      if (text) {
-        setSttText(text);
+      const result = await transcribeAudio(audioFile);
+      if (result.text) {
+        setSttText(result.text);
+        // SBAR 요약이 있으면 자동으로 설정
+        if (result.sbarSummary) {
+          setSbarText(result.sbarSummary);
+        }
+        // ARS 서비스용 자연스러운 문장이 있으면 설정
+        if (result.arsNarrative) {
+          setArsNarrative(result.arsNarrative);
+        }
         setVoiceMode(false);
         setAudioFile(null);
       } else {
@@ -529,9 +538,17 @@ export const SafeBridgeApp: React.FC = () => {
         
         // 녹음된 파일을 업로드
         try {
-          const text = await transcribeAudio(audioFile);
-          if (text) {
-            setSttText(text);
+          const result = await transcribeAudio(audioFile);
+          if (result.text) {
+            setSttText(result.text);
+            // SBAR 요약이 있으면 자동으로 설정
+            if (result.sbarSummary) {
+              setSbarText(result.sbarSummary);
+            }
+            // ARS 서비스용 자연스러운 문장이 있으면 설정
+            if (result.arsNarrative) {
+              setArsNarrative(result.arsNarrative);
+            }
             setVoiceMode(false);
           } else {
             alert("음성 인식 결과가 없습니다.");
@@ -676,10 +693,10 @@ export const SafeBridgeApp: React.FC = () => {
       arsSource === "stt"
         ? sttText?.trim()
         : arsSource === "sbar"
-        ? sbarText?.trim()
+        ? (arsNarrative?.trim() || sbarText?.trim())  // ARS 서비스용 자연스러운 문장 우선 사용
         : "";
     if (arsDetail) {
-      pieces.push(arsSource === "sbar" ? `SBAR 요약: ${arsDetail}` : `STT 원문: ${arsDetail}`);
+      pieces.push(arsSource === "sbar" ? arsDetail : `STT 원문: ${arsDetail}`);
     }
     pieces.push("수용 요청드립니다.");
     return pieces.filter(Boolean).join(" ");
@@ -945,6 +962,7 @@ export const SafeBridgeApp: React.FC = () => {
           setPatientSex={setPatientSex}
           patientAgeBand={patientAgeBand}
           setPatientAgeBand={setPatientAgeBand}
+          onArsNarrativeChange={setArsNarrative}
         />
 
         <HospitalPrioritySelector

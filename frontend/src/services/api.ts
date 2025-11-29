@@ -156,17 +156,38 @@ export const searchHospitals = async (
 };
 
 // STT 음성 인식
-export const transcribeAudio = async (audioFile: File): Promise<string> => {
+export const transcribeAudio = async (audioFile: File): Promise<{ text: string; sbarSummary?: string; arsNarrative?: string }> => {
   try {
     const formData = new FormData();
     formData.append("audio", audioFile);
     const res = await axios.post(`${API_BASE_URL}/api/stt/transcribe`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
-    return res.data?.text || "";
+    return {
+      text: res.data?.text || "",
+      sbarSummary: res.data?.sbar_summary || undefined,
+      arsNarrative: res.data?.ars_narrative || undefined  // ARS 서비스용 자연스러운 문장
+    };
   } catch (error: any) {
     console.error("음성 인식 실패:", error);
     throw new Error(error.response?.data?.message || "음성 인식 중 오류가 발생했습니다.");
+  }
+};
+
+// 텍스트를 SBAR 형식으로 변환
+export const convertTextToSBAR = async (text: string): Promise<{ text: string; sbarSummary?: string; arsNarrative?: string }> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/stt/convert-to-sbar`, {
+      text: text,
+    });
+    return {
+      text: res.data?.text || "",
+      sbarSummary: res.data?.sbar_summary || undefined,
+      arsNarrative: res.data?.ars_narrative || undefined  // ARS 서비스용 자연스러운 문장
+    };
+  } catch (error: any) {
+    console.error("텍스트→SBAR 변환 실패:", error);
+    throw new Error(error.response?.data?.message || "텍스트 변환 중 오류가 발생했습니다.");
   }
 };
 

@@ -132,7 +132,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
         {/* 상단 헤더 */}
         <header className="h-14 flex items-center justify-between px-4 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold tracking-wide text-emerald-700 uppercase">SAFE BRIDGE</span>
+            <span className="text-xs font-semibold tracking-wide text-slate-700 uppercase">SAFE BRIDGE</span>
             <span className="w-px h-4 bg-slate-300" />
             <span className="text-sm font-semibold text-slate-900">구급대원 인계 채팅</span>
           </div>
@@ -156,7 +156,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
             type="button"
             onClick={handleOpenConfirmModal}
             disabled={localSession.status === "COMPLETED"}
-            className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-full text-xs font-semibold border border-green-600 text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             환자 인계 완료
           </button>
@@ -194,7 +194,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                 <div className="flex-1">
                   <textarea
                     rows={1}
-                    className="w-full bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:outline-none resize-none border border-emerald-500 rounded-xl px-3 py-2"
+                    className="w-full bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:outline-none resize-none border border-slate-500 rounded-xl px-3 py-2"
                     placeholder="응급실에 전달할 환자 상태, 처치 내용, 추가 정보를 입력하세요."
                     value={draftText}
                     onChange={(e) => setDraftText(e.target.value)}
@@ -204,7 +204,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   type="button"
                   onClick={handleSendFromParamedic}
                   disabled={!draftText.trim() && !draftImage}
-                  className="h-10 px-4 rounded-xl text-sm font-semibold shadow-sm border border-slate-300 bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-emerald-700"
+                  className="h-10 px-4 rounded-xl text-sm font-semibold shadow-sm border border-slate-300 bg-slate-700 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
                 >
                   전송
                 </button>
@@ -319,7 +319,7 @@ const ParamedicMessageBubble: React.FC<ParamedicMessageBubbleProps> = ({ message
     <div className={`mb-3 flex ${isParamedic ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
-          isParamedic ? "bg-emerald-600 text-white rounded-br-sm" : "bg-white text-slate-900 border border-slate-200 rounded-bl-sm"
+          isParamedic ? "bg-slate-700 text-white rounded-br-sm" : "bg-white text-slate-900 border border-slate-200 rounded-bl-sm"
         }`}
       >
         <div className="flex items-center justify-between mb-1">
@@ -393,7 +393,7 @@ const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-white bg-emerald-600 hover:bg-emerald-700"
+            className="px-4 py-2 rounded-full text-xs font-semibold border border-green-600 text-white bg-green-600 hover:bg-green-700"
           >
             인계 완료
           </button>

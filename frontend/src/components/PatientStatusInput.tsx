@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { generateSBARSummary } from "../utils/sbarUtils";
+import { convertTextToSBAR } from "../services/api";
 import type { CriticalPreset } from "../types";
 
 interface PatientStatusInputProps {
@@ -21,6 +22,7 @@ interface PatientStatusInputProps {
   setPatientSex: (sex: "male" | "female" | null) => void;
   patientAgeBand: string | null;
   setPatientAgeBand: (band: string | null) => void;
+  onArsNarrativeChange?: (narrative: string) => void;  // ARS 서비스용 자연스러운 문장 전달 콜백
 }
 
 export const CRITICAL_PRESETS: CriticalPreset[] = [
@@ -73,15 +75,70 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
   setPatientSex,
   patientAgeBand,
   setPatientAgeBand,
+  onArsNarrativeChange,
 }) => {
+  const [isConvertingSBAR, setIsConvertingSBAR] = useState<boolean>(false);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastConvertedTextRef = useRef<string>("");
+
+  // 텍스트 입력 시 실시간 SBAR 변환 (debounce 적용)
   useEffect(() => {
-    setSbarText(sttText);
+    // 빈 텍스트인 경우 변환하지 않음
+    if (!sttText || !sttText.trim()) {
+      setSbarText("");
+      lastConvertedTextRef.current = "";
+      return;
+    }
+
+    // 이전에 변환한 텍스트와 동일하면 변환하지 않음
+    if (sttText === lastConvertedTextRef.current) {
+      return;
+    }
+
+    // 이전 타이머가 있으면 취소
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    // 1.5초 후에 SBAR 변환 API 호출 (debounce)
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        setIsConvertingSBAR(true);
+        const result = await convertTextToSBAR(sttText);
+        
+        if (result.sbarSummary) {
+          setSbarText(result.sbarSummary);
+          lastConvertedTextRef.current = sttText;
+        } else {
+          // SBAR 변환 실패 시 원본 텍스트 사용
+          setSbarText(sttText);
+        }
+        
+        // ARS 서비스용 자연스러운 문장을 상위 컴포넌트로 전달
+        if (result.arsNarrative && onArsNarrativeChange) {
+          onArsNarrativeChange(result.arsNarrative);
+        }
+      } catch (error: any) {
+        console.error("SBAR 변환 실패:", error);
+        // 에러 발생 시 원본 텍스트 사용
+        setSbarText(sttText);
+      } finally {
+        setIsConvertingSBAR(false);
+      }
+    }, 1500); // 1.5초 debounce
+
+    // cleanup 함수
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
   }, [sttText, setSbarText]);
 
   const buildArsButtonClass = (active: boolean) => {
     const base = "inline-flex items-center gap-1 rounded-md border px-3 md:px-4 py-1.5 text-xs md:text-sm";
     return active
-      ? base + " border-emerald-600 bg-emerald-600 text-white font-semibold shadow-sm"
+      ? base + " border-slate-700 bg-slate-700 text-white font-semibold shadow-sm"
       : base + " border-slate-300 bg-white text-slate-700 hover:bg-slate-50";
   };
 
@@ -221,12 +278,12 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
                     <span className="relative flex h-2.5 w-2.5">
                       <span
                         className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                          isRecording ? "bg-white animate-ping" : "bg-emerald-200"
+                          isRecording ? "bg-white animate-ping" : "bg-slate-300"
                         }`}
                       ></span>
                       <span
                         className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
-                          isRecording ? "bg-white" : "bg-emerald-400"
+                          isRecording ? "bg-white" : "bg-slate-500"
                         }`}
                       ></span>
                     </span>
@@ -263,11 +320,18 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-xs md:text-sm font-semibold text-slate-700">SBAR 형식 요약</h3>
+              {isConvertingSBAR && (
+                <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                  <span className="inline-block w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></span>
+                  변환 중...
+                </span>
+              )}
             </div>
             <textarea
               className="w-full min-h-[120px] md:min-h-[150px] rounded-lg border border-slate-200 px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-1 focus:ring-slate-500 focus:border-slate-500 bg-white"
               value={sbarText}
               readOnly
+              placeholder={isConvertingSBAR ? "SBAR 형식으로 변환 중..." : "텍스트를 입력하면 자동으로 SBAR 형식으로 변환됩니다."}
             />
             <div className="mt-1 flex justify-end">
               <button
@@ -335,7 +399,7 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
                     onClick={() => setPatientAgeBand(patientAgeBand === band ? null : band)}
                     className={`rounded-full px-3 py-1.5 text-[11px] font-semibold border ${
                       patientAgeBand === band
-                        ? "bg-emerald-500 text-white border-emerald-500 shadow"
+                        ? "bg-slate-700 text-white border-slate-700 shadow"
                         : "bg-white text-slate-700 border-slate-300 hover:border-slate-400"
                     }`}
                   >
@@ -396,7 +460,7 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
                     {p.preKtasLevel && (
                       <div
                         className={`text-[11px] font-semibold ${
-                          active ? "text-emerald-100" : "text-slate-500"
+                          active ? "text-slate-200" : "text-slate-500"
                         }`}
                       >
                         {p.preKtasLevel}
