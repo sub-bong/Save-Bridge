@@ -2,11 +2,7 @@
   "compilerOptions": {
     "target": "ESNext",
     "useDefineForClassFields": true,
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ESNext"
-    ],
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -18,9 +14,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "types": ["vite/client"] // 11/29 추가: vite -> import.meta.env로 .env 파일 접근을 위한 추가 옵션 설정(.env변수 중 VITE_ 접두사가 붙은 변수만 로드)
   },
-  "include": [
-    "src"
-  ]
+  "include": ["src", "vite-env.d.ts"] // 11/29 추가: vite -> import.meta.env로 .env 파일 접근을 위한 추가 옵션 설정(.env변수 중 VITE_ 접두사가 붙은 변수만 로드)
 }
