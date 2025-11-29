@@ -47,8 +47,15 @@ export const SafeBridgeApp: React.FC = () => {
   const [chatSession, setChatSession] = useState<HospitalHandoverSummary | null>(null);
   const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
   const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<{ team_id: number; ems_id: string; region: string | null } | null>(null);
-  const [currentRequestId, setCurrentRequestId] = useState<number | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ 
+    user_type: "EMS" | "HOSPITAL";
+    team_id?: number;
+    ems_id?: string;
+    region?: string | null;
+    hospital_id?: string;
+    hospital_name?: string;
+  } | null>(null);
+  const [currentRequestId, setCurrentRequestId] = useState<number>(0);
   const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -400,17 +407,22 @@ export const SafeBridgeApp: React.FC = () => {
       // EmergencyRequest 생성 (DB에 저장)
       if (currentUser && uniqueHospitals.length > 0) {
         try {
-          const patientAge = extractPatientAge(patientAgeBand);
-          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
-          const preKtasLevel = extractPreKtasLevel(symptom, sttText);
+          // STT 텍스트에서 환자 정보 추출 (우선순위)
+          const patientAgeFromStt = extractPatientAge(sttText);
+          const patientSexFromStt = extractPatientSex(sttText);
+          const preKtasLevel = extractPreKtasLevel(sttText);
+          
+          // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
+          const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
+          const patientSexValue = patientSexFromStt || (patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M");
           
           const emergencyRequest = await createEmergencyRequest({
-            team_id: currentUser.team_id,
+            team_id: currentUser.team_id!,
             patient_sex: patientSexValue,
-            patient_age: patientAge || 30, // 기본값
-            pre_ktas_class: preKtasLevel || "3",
-            stt_full_text: sttText || null,
-            rag_summary: sbarText || null,
+            patient_age: patientAge,
+            pre_ktas_class: preKtasLevel || 3,
+            stt_full_text: sttText,
+            rag_summary: sbarText,
             current_lat: coords.lat!,
             current_lon: coords.lon!,
           });
@@ -673,21 +685,26 @@ export const SafeBridgeApp: React.FC = () => {
       if (!requestId && currentUser) {
         console.log("EmergencyRequest가 없어서 먼저 생성합니다...");
         try {
-          const patientAge = extractPatientAge(patientAgeBand);
-          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
-          const preKtasLevel = extractPreKtasLevel(symptom, sttText);
+          // STT 텍스트에서 환자 정보 추출 (우선순위)
+          const patientAgeFromStt = extractPatientAge(sttText);
+          const patientSexFromStt = extractPatientSex(sttText);
+          const preKtasLevel = extractPreKtasLevel(sttText);
+          
+          // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
+          const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
+          const patientSexValue = patientSexFromStt || (patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M");
           
           if (!coords.lat || !coords.lon) {
             throw new Error("좌표 정보가 없습니다.");
           }
           
           const emergencyRequest = await createEmergencyRequest({
-            team_id: currentUser.team_id,
+            team_id: currentUser.team_id!,
             patient_sex: patientSexValue,
-            patient_age: patientAge || 30, // 기본값
-            pre_ktas_class: preKtasLevel || "3",
-            stt_full_text: sttText || null,
-            rag_summary: sbarText || null,
+            patient_age: patientAge,
+            pre_ktas_class: preKtasLevel || 3,
+            stt_full_text: sttText,
+            rag_summary: sbarText,
             current_lat: coords.lat,
             current_lon: coords.lon,
           });
@@ -1273,6 +1290,7 @@ export const SafeBridgeApp: React.FC = () => {
             lastUpdated: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
           }}
           sttText={sttText}
+          emsId={currentUser?.ems_id} // 로그인한 구급대원의 ems_id 전달
           mapCoords={coords}
           mapRoutePaths={routePaths}
           resolveHospitalColor={resolveHospitalColor}

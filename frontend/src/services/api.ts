@@ -270,7 +270,29 @@ export const logout = async (): Promise<void> => {
   }
 };
 
-export const getCurrentUser = async (): Promise<{ team_id: number; ems_id: string; region: string | null } | null> => {
+export const hospitalLogin = async (hospitalId: string, password: string): Promise<{ hospital_id: string; hospital_name: string }> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/auth/hospital-login`, {
+      hospital_id: hospitalId,
+      password: password,
+    }, {
+      withCredentials: true, // 쿠키 포함
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("병원 로그인 실패:", error);
+    throw new Error(error.response?.data?.error || "로그인 중 오류가 발생했습니다.");
+  }
+};
+
+export const getCurrentUser = async (): Promise<{ 
+  user_type: "EMS" | "HOSPITAL";
+  team_id?: number;
+  ems_id?: string;
+  region?: string | null;
+  hospital_id?: string;
+  hospital_name?: string;
+} | null> => {
   try {
     const res = await axios.get(`${API_BASE_URL}/api/auth/me`, {
       withCredentials: true,
@@ -375,6 +397,36 @@ export const getChatSession = async (
   }
 };
 
+// ChatSession 인계 완료 API
+export const completeChatSession = async (sessionId: number, emsId: string): Promise<{
+  session_id: number;
+  ended_at: string;
+}> => {
+  try {
+    const res = await axios.post(
+      `${API_BASE_URL}/api/chat/session/${sessionId}/complete`,
+      { ems_id: emsId },
+      { withCredentials: true }
+    );
+    return res.data;
+  } catch (error: any) {
+    console.error("ChatSession 인계 완료 실패:", error);
+    throw new Error(error.response?.data?.error || "인계 완료 처리 중 오류가 발생했습니다.");
+  }
+};
+
+// ChatSession 삭제 API
+export const deleteChatSession = async (sessionId: number): Promise<void> => {
+  try {
+    await axios.delete(`${API_BASE_URL}/api/chat/session/${sessionId}`, {
+      withCredentials: true,
+    });
+  } catch (error: any) {
+    console.error("ChatSession 삭제 실패:", error);
+    throw new Error(error.response?.data?.error || "채팅 세션 삭제 중 오류가 발생했습니다.");
+  }
+};
+
 // ChatSession 목록 조회 API (응급실 대시보드용)
 export const getChatSessions = async (
   hospitalId?: string
@@ -384,6 +436,7 @@ export const getChatSessions = async (
   assignment_id: number;
   started_at: string;
   ended_at?: string;
+  is_completed?: boolean;  // EmergencyRequest.is_completed
   ems_id: string | null;
   hospital_name: string | null;
   patient_age: number | null;
@@ -416,7 +469,7 @@ export const createEmergencyRequest = async (data: {
   team_id: number;
   patient_sex: string;
   patient_age: number;
-  pre_ktas_class: string;
+  pre_ktas_class: number;
   stt_full_text?: string;
   rag_summary?: string;
   current_lat: number;
