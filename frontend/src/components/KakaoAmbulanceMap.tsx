@@ -55,6 +55,7 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     const center = new kakao.maps.LatLng(coords.lat, coords.lon);
     if (!mapRef.current) {
       mapRef.current = new kakao.maps.Map(containerRef.current, { center, level: 5 });
+      // 구급차 마커 이미지 추가 필요
       const ambImg = new kakao.maps.MarkerImage("https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png", new kakao.maps.Size(32, 34));
       ambRef.current = new kakao.maps.Marker({ position: center, image: ambImg });
       ambRef.current.setMap(mapRef.current);
@@ -92,29 +93,16 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     }
   }, [ready, hospitals, routePath]);
 
-  // 경로 따라 구급차 애니메이션
+  // 구급차 기준 실시간성 갱신
   useEffect(() => {
     if (!ready || !mapRef.current || !ambRef.current) return;
+    if (!coords.lat || !coords.lon) return;
     const { kakao } = window;
-    if (!routePath.length) {
-      if (coords.lat && coords.lon) ambRef.current.setPosition(new kakao.maps.LatLng(coords.lat, coords.lon));
-      return;
-    }
-    if (timerRef.current) clearInterval(timerRef.current);
-    idxRef.current = 0;
-    timerRef.current = setInterval(() => {
-      const [lon, lat] = routePath[idxRef.current] || [];
-      if (lat && lon) {
-        const pos = new kakao.maps.LatLng(lat, lon);
-        ambRef.current.setPosition(pos);
-        mapRef.current.setCenter(pos);
-      }
-      idxRef.current = (idxRef.current + 1) % routePath.length;
-    }, Math.max(300, tickMs));
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [ready, routePath, coords.lat, coords.lon, tickMs]);
+    const pos = new kakao.maps.LatLng(coords.lat, coords.lon);
+    ambRef.current.setPosition(pos);
+    // 필요하면 아래 줄로 센터도 GPS에 맞춰 이동
+    mapRef.current.setCenter(pos);
+  }, [ready, coords.lat, coords.lon]);
 
   return <div ref={containerRef} className="w-full h-[360px] rounded-xl border border-slate-200 shadow-sm" />;
 };
