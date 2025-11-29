@@ -128,7 +128,7 @@ export function detectPatientAgeGroup(sttText: string | null | undefined): "adul
 }
 
 /**
- * STT 텍스트에서 환자 나이 추출
+ * STT 텍스트에서 환자 나이 추출 (DB 저장용 - 숫자만 반환)
  * @param sttText STT로 입력받은 텍스트
  * @returns 나이 숫자 또는 undefined
  */
@@ -136,19 +136,58 @@ export function extractPatientAge(sttText: string | null | undefined): number | 
   if (!sttText) return undefined;
   
   const text = sttText;
-  // "60대", "60세", "60살" 등의 패턴 찾기
-  const agePatterns = [
-    /(\d+)\s*(?:세|살|년생)/,
-    /(\d+)\s*대/,
-  ];
   
-  for (const pattern of agePatterns) {
-    const match = text.match(pattern);
-    if (match && match[1]) {
-      const age = parseInt(match[1]);
-      if (age > 0 && age < 150) {
-        return age;
-      }
+  // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
+  const exactAgePattern = /(\d+)\s*(?:세|살|년생)/;
+  const exactMatch = text.match(exactAgePattern);
+  if (exactMatch && exactMatch[1]) {
+    const age = parseInt(exactMatch[1]);
+    if (age > 0 && age < 150) {
+      return age;
+    }
+  }
+  
+  // 연령대 추출 ("20대", "30대" 등) - 중간값으로 변환하여 DB에 저장
+  const ageBandPattern = /(\d+)\s*대/;
+  const bandMatch = text.match(ageBandPattern);
+  if (bandMatch && bandMatch[1]) {
+    const decade = parseInt(bandMatch[1]);
+    if (decade >= 0 && decade < 15) {
+      // 연령대의 중간값 반환 (예: 20대 → 25세, 30대 → 35세)
+      return decade * 10 + 5;
+    }
+  }
+  
+  return undefined;
+}
+
+/**
+ * STT 텍스트에서 환자 연령대 추출 (표시용 - "20대" 형식으로 반환)
+ * @param sttText STT로 입력받은 텍스트
+ * @returns "20대", "30세" 등의 문자열 또는 undefined
+ */
+export function extractPatientAgeDisplay(sttText: string | null | undefined): string | undefined {
+  if (!sttText) return undefined;
+  
+  const text = sttText;
+  
+  // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
+  const exactAgePattern = /(\d+)\s*(?:세|살|년생)/;
+  const exactMatch = text.match(exactAgePattern);
+  if (exactMatch && exactMatch[1]) {
+    const age = parseInt(exactMatch[1]);
+    if (age > 0 && age < 150) {
+      return `${age}세`;
+    }
+  }
+  
+  // 연령대 추출 ("20대", "30대" 등) - 그대로 반환
+  const ageBandPattern = /(\d+)\s*대/;
+  const bandMatch = text.match(ageBandPattern);
+  if (bandMatch && bandMatch[1]) {
+    const decade = parseInt(bandMatch[1]);
+    if (decade >= 0 && decade < 15) {
+      return `${decade}대`;
     }
   }
   
@@ -165,14 +204,24 @@ export function extractPatientSex(sttText: string | null | undefined): "M" | "F"
   
   const text = sttText.toLowerCase();
   
-  // 남성 키워드
-  if (text.includes("남성") || text.includes("남자") || text.includes("male") || text.includes("m/")) {
-    return "M";
+  // 여성 키워드 (우선순위 높음 - "여성"이 "남성"보다 먼저 나올 수 있음)
+  const femaleKeywords = [
+    "여성", "여자", "female", "f/", "f ", "여 ", "여성인", "여자분"
+  ];
+  for (const keyword of femaleKeywords) {
+    if (text.includes(keyword)) {
+      return "F";
+    }
   }
   
-  // 여성 키워드
-  if (text.includes("여성") || text.includes("여자") || text.includes("female") || text.includes("f/")) {
-    return "F";
+  // 남성 키워드
+  const maleKeywords = [
+    "남성", "남자", "male", "m/", "m ", "남 ", "남성인", "남자분"
+  ];
+  for (const keyword of maleKeywords) {
+    if (text.includes(keyword)) {
+      return "M";
+    }
   }
   
   return undefined;

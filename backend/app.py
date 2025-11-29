@@ -26,7 +26,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # CORS 설정
-CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
+CORS(app, origins=CORS_ORIGINS, supports_credentials=True, methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allow_headers=['Content-Type', 'Authorization'])
 
 # SQLAlchemy 설정
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URI

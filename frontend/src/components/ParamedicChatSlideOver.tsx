@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, ChangeEvent } from "react";
+import React, { useState, useEffect, useRef, ChangeEvent, useCallback } from "react";
 import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital, Coords } from "../types";
 import { MapDisplay } from "./MapDisplay";
-import { getChatMessages, sendChatMessage } from "../services/api";
+import { getChatMessages, sendChatMessage, completeChatSession } from "../services/api";
 
 interface ParamedicChatSlideOverProps {
   isOpen: boolean;
@@ -9,6 +9,7 @@ interface ParamedicChatSlideOverProps {
   hospital: Hospital;
   patientMeta: PatientTransportMeta;
   sttText?: string;
+  emsId?: string; // 구급대원 식별코드 (로그인한 사용자의 ems_id)
   onClose: () => void;
   onHandoverComplete: (sessionId: string) => void;
   mapCoords: Coords;
@@ -16,20 +17,21 @@ interface ParamedicChatSlideOverProps {
   resolveHospitalColor: (hospital: Hospital, index: number) => string;
 }
 
-const PARAMEDIC_ID = "A100"; // 구급대원 식별코드 (실제로는 설정에서 가져올 수 있음)
-
 export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   isOpen,
   session,
   hospital,
   patientMeta,
   sttText = "",
+  emsId = "A100", // 기본값 (하위 호환성)
   onClose,
   onHandoverComplete,
   mapCoords,
   mapRoutePaths,
   resolveHospitalColor,
 }) => {
+  // 로그인한 구급대원의 ems_id 사용
+  const PARAMEDIC_ID = emsId;
   const [localSession, setLocalSession] = useState<HospitalHandoverSummary>(session);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draftText, setDraftText] = useState("");
@@ -44,120 +46,132 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     setLocalSession(session);
   }, [session]);
 
-  // DB에서 기존 메시지 로드
+  // 메시지 포맷팅 헬퍼 함수
+  const formatMessages = useCallback((dbMessages: any[]): ChatMessage[] => {
+    return dbMessages.map((msg) => ({
+      id: `msg-${msg.message_id}`,
+      role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
+      content: msg.content,
+      imageUrl: msg.image_url,
+      sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    }));
+  }, []);
+
+  // 초기 메시지 생성 헬퍼 함수
+  const createInitialMessage = useCallback((text: string): ChatMessage => {
+    return {
+      id: "s1-m1",
+      role: "PARAMEDIC",
+      content: `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${text}`,
+      sentAt: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    };
+  }, []);
+
+  // DB에서 메시지 로드
   useEffect(() => {
-    if (isOpen && localSession.sessionId) {
-      const loadMessages = async () => {
-        try {
-          // 기존 메시지 로드
-          const dbMessages = await getChatMessages(localSession.sessionId!);
-          const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
-            id: `msg-${msg.message_id}`,
-            role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
-            content: msg.content,
-            imageUrl: msg.image_url,
-            sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
-          }));
-          
-          setMessages(formattedMessages);
-        } catch (error) {
-          console.error("메시지 로드 실패:", error);
-        }
-      };
-      
-      // 초기 로드
-      loadMessages();
-      
-      // 메시지 자동 새로고침 (3초마다 - 양방향 통신)
-      const interval = setInterval(() => {
-        if (localSession.sessionId) {
-          loadMessages();
-        }
-      }, 3000);
-      
-      return () => clearInterval(interval);
-    } else if (isOpen && messages.length === 0 && sttText) {
-      // sessionId가 없으면 초기 메시지만 로컬에 표시
-      const now = new Date();
-      const initialMessages: ChatMessage[] = [
-        {
-          id: "s1-m1",
-          role: "PARAMEDIC",
-          content: `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${sttText}`,
-          sentAt: now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
-        },
-      ];
-      setMessages(initialMessages);
-    }
-  }, [isOpen, localSession.sessionId]);
-  
-  // 초기 메시지 전송 (sessionId가 있고 sttText가 있을 때 한 번만)
-  useEffect(() => {
-    if (!isOpen || !localSession.sessionId || !sttText) return;
-    if (initialMessageSentRef.current) return;
-    
-    const sendInitialMessage = async () => {
-      // 이미 전송 중이면 리턴
-      if (initialMessageSentRef.current) return;
-      
-      // 플래그를 먼저 설정하여 중복 실행 방지
-      initialMessageSentRef.current = true;
-      
-      // 기존 메시지 확인
-      try {
-        const dbMessages = await getChatMessages(localSession.sessionId!);
-        // 이미 메시지가 있으면 초기 메시지 전송 안 함
-        if (dbMessages.length > 0) {
-          console.log("기존 메시지가 있어 초기 메시지 전송 건너뜀");
-          return;
-        }
-      } catch (error) {
-        console.error("기존 메시지 확인 실패:", error);
-        initialMessageSentRef.current = false; // 에러 시 플래그 리셋
+    if (!isOpen || !localSession.sessionId) {
+      // sessionId가 없는 경우: 로컬 초기 메시지 표시 (한 번만)
+      if (!isOpen) {
+        setMessages([]);
         return;
       }
-      
-      const initialContent = `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${sttText}`;
+      if (!localSession.sessionId && sttText) {
+        // 로컬 메시지만 표시 (DB 저장 안 함)
+        const localMsg = createInitialMessage(sttText);
+        setMessages([localMsg]);
+      } else {
+        setMessages([]);
+      }
+      return;
+    }
+
+    // sessionId가 있는 경우: DB에서 메시지 로드
+    const loadMessages = async () => {
       try {
-        console.log("초기 메시지 전송 시도:", {
-          sessionId: localSession.sessionId,
-          senderType: "EMS",
-          senderRefId: PARAMEDIC_ID,
-          content: initialContent,
-        });
+        const dbMessages = await getChatMessages(localSession.sessionId!);
+        setMessages(formatMessages(dbMessages));
+      } catch (error) {
+        console.error("메시지 로드 실패:", error);
+      }
+    };
+
+    // 초기 로드
+    loadMessages();
+    
+    // 메시지 자동 새로고침 (3초마다)
+    const interval = setInterval(() => {
+      loadMessages();
+    }, 3000);
+    
+    return () => clearInterval(interval);
+  }, [isOpen, localSession.sessionId, formatMessages, createInitialMessage, sttText]);
+
+  // 초기 메시지 전송 (한 번만, sessionId와 sttText가 모두 있을 때)
+  useEffect(() => {
+    if (!isOpen || !localSession.sessionId || !sttText) {
+      return;
+    }
+    
+    // 이미 전송했으면 건너뛰기
+    if (initialMessageSentRef.current) {
+      return;
+    }
+    
+    const sendInitialMessage = async () => {
+      // 플래그를 먼저 설정하여 중복 전송 방지
+      initialMessageSentRef.current = true;
+      
+      try {
+        // 기존 메시지 확인 (중복 체크)
+        const dbMessages = await getChatMessages(localSession.sessionId!);
+        const initialContent = `119 구급대원 ${PARAMEDIC_ID}입니다. 현재 ${sttText}`;
         
-        const savedMessage = await sendChatMessage(
+        // 이미 같은 내용의 메시지가 있는지 확인
+        const hasInitialMessage = dbMessages.some(msg => 
+          msg.content && msg.content.includes(initialContent.substring(0, 30))
+        );
+        
+        if (hasInitialMessage || dbMessages.length > 0) {
+          console.log("✅ 기존 메시지가 있어 초기 메시지 전송 건너뜀", { 
+            hasInitialMessage, 
+            messageCount: dbMessages.length 
+          });
+          // 기존 메시지로 UI 업데이트
+          setMessages(formatMessages(dbMessages));
+          return;
+        }
+
+        // 초기 메시지 전송
+        await sendChatMessage(
           localSession.sessionId!,
           "EMS",
           PARAMEDIC_ID,
           initialContent
         );
         
-        console.log("초기 메시지 저장 성공:", savedMessage);
-        
+        console.log("✅ 초기 메시지 저장 성공");
         // 메시지 목록 다시 로드
-        const dbMessages = await getChatMessages(localSession.sessionId!);
-        const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
-          id: `msg-${msg.message_id}`,
-          role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
-          content: msg.content,
-          imageUrl: msg.image_url,
-          sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
-        }));
-        setMessages(formattedMessages);
+        const updatedMessages = await getChatMessages(localSession.sessionId!);
+        setMessages(formatMessages(updatedMessages));
       } catch (error) {
-        console.error("초기 메시지 저장 실패:", error);
+        console.error("❌ 초기 메시지 저장 실패:", error);
         initialMessageSentRef.current = false; // 에러 시 플래그 리셋하여 재시도 가능
       }
     };
+
+    // 약간의 지연을 두어 메시지 로드가 먼저 완료되도록
+    const timeoutId = setTimeout(() => {
+      sendInitialMessage();
+    }, 500);
     
-    sendInitialMessage();
-  }, [isOpen, localSession.sessionId, sttText]);
+    return () => clearTimeout(timeoutId);
+  }, [isOpen, localSession.sessionId, sttText, formatMessages]);
   
   // 세션이 변경되면 초기 메시지 전송 플래그 리셋
   useEffect(() => {
     if (localSession.sessionId) {
       initialMessageSentRef.current = false;
+      console.log("🔄 세션 변경으로 초기 메시지 전송 플래그 리셋:", localSession.sessionId);
     }
   }, [localSession.sessionId]);
 
@@ -197,7 +211,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     // DB에 저장 (sessionId가 있을 때만)
     if (localSession.sessionId) {
       try {
-        console.log("메시지 전송 시도:", {
+        console.log("📤 메시지 전송 시도:", {
           sessionId: localSession.sessionId,
           senderType: "EMS",
           senderRefId: PARAMEDIC_ID,
@@ -210,7 +224,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           text,
           draftImage ? undefined : undefined // TODO: 이미지 업로드 처리 필요
         );
-        console.log("메시지 저장 성공:", savedMessage);
+        console.log("✅ 메시지 저장 성공:", savedMessage);
         // DB에서 저장된 메시지로 업데이트
         setMessages((prev) =>
           prev.map((msg) =>
@@ -227,12 +241,18 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
               : msg
           )
         );
-      } catch (error) {
-        console.error("메시지 저장 실패:", error);
+      } catch (error: any) {
+        console.error("❌ 메시지 저장 실패:", error);
+        console.error("❌ 에러 상세:", {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+        });
         // 실패해도 로컬 메시지는 유지
+        alert(`메시지 저장 실패: ${error.response?.data?.error || error.message || "알 수 없는 오류"}`);
       }
     } else {
-      console.warn("sessionId가 없어 메시지를 DB에 저장할 수 없습니다. localSession:", localSession);
+      console.warn("⚠️ sessionId가 없어 메시지를 DB에 저장할 수 없습니다. localSession:", localSession);
     }
   };
 
@@ -249,7 +269,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     setConfirmError(null);
   };
 
-  const handleConfirmHandoverComplete = () => {
+  const handleConfirmHandoverComplete = async () => {
     const trimmed = confirmCode.trim();
     if (!trimmed) {
       setConfirmError("식별코드를 입력해 주세요.");
@@ -258,6 +278,18 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     if (trimmed !== PARAMEDIC_ID) {
       setConfirmError("식별코드가 일치하지 않습니다. 다시 확인해 주세요.");
       return;
+    }
+
+    // DB에 인계 완료 처리
+    if (localSession.sessionId) {
+      try {
+        await completeChatSession(localSession.sessionId, PARAMEDIC_ID);
+        console.log("✅ 인계 완료 처리 성공");
+      } catch (error: any) {
+        console.error("❌ 인계 완료 처리 실패:", error);
+        setConfirmError(error.message || "인계 완료 처리 중 오류가 발생했습니다.");
+        return;
+      }
     }
 
     setLocalSession((prev) => ({ ...prev, status: "COMPLETED" }));
@@ -303,7 +335,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
             disabled={localSession.status === "COMPLETED"}
             className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            환자 인계 완료
+            인계 처리
           </button>
         </div>
 
@@ -510,7 +542,7 @@ const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl p-5">
-        <div className="text-sm font-semibold text-slate-900 mb-1">환자 인계 완료 처리</div>
+        <div className="text-sm font-semibold text-slate-900 mb-1">환자 인계 처리</div>
         <p className="text-xs text-slate-600 mb-4">
           정말 환자 인계 완료 상태로 전환하시겠습니까?
           <br />
@@ -540,7 +572,7 @@ const HandoverConfirmModal: React.FC<HandoverConfirmModalProps> = ({
             onClick={onConfirm}
             className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-white bg-emerald-600 hover:bg-emerald-700"
           >
-            인계 완료
+            인계 처리
           </button>
         </div>
       </div>
