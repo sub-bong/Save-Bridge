@@ -55,7 +55,7 @@ if [ $? -ne 0 ]; then
 fi
 
 cd backend
-nohup python3 app.py > ../logs/flask_server.log 2>&1 &
+nohup python app.py > ../logs/flask_server.log 2>&1 &
 cd ..
 FLASK_PID=$!
 echo "    Flask PID: $FLASK_PID"
@@ -75,7 +75,7 @@ fi
 
 # ngrok 자동 실행 (Twilio 콜백용)
 echo ""
-echo " ngrok 터널 자동 시작 (Twilio 콜백용)..."
+echo " ngrok 터널 자동 시작 (Tw1ilio 콜백용)..."
 NGROK_PATH=""
 if [ -f "./ngrok" ]; then
     NGROK_PATH="./ngrok"
@@ -143,6 +143,11 @@ fi
 # React 앱 의존성 확인 및 설치
 echo ""
 echo "  React 앱 준비 중..."
+
+set -a
+source "$PROJECT_ROOT/.env" 2>/dev/null || true
+set +a
+
 cd "$REACT_DIR"
 
 if [ ! -d "node_modules" ]; then
