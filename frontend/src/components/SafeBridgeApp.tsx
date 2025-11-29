@@ -1067,19 +1067,26 @@ export const SafeBridgeApp: React.FC = () => {
     (첫 렌더링 이후)
     liveCoords와 Coords 상태관리 변수 마운트하고 데이터 상태 업데이트
   */
+
+  const applyRegionFromCoords = async (lat: number, lon: number) => {
+    const res = await coordToRegion(lat, lon);
+    if (res) setRegion(res);
+  };
+
   useEffect(() => {
     if (!navigator.geolocation) return;
     const id = navigator.geolocation.watchPosition(
-      (pos) => {
+      async (pos) => {
         const next = { lat: pos.coords.latitude, lon: pos.coords.longitude };
         setLiveCoords(next);
         setCoords(next); // 버튼/검색에서 쓰는 coords도 같이 업데이트
+        if (!region) await applyRegionFromCoords(next.lat!, next.lon!);
       },
       () => {},
       { enableHighAccuracy: true, maximumAge: 5000 }
     );
     return () => navigator.geolocation.clearWatch(id);
-  }, []);
+  }, [region]);
 
   const currentPos = liveCoords.lat ? liveCoords : coords;
 

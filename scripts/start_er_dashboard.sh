@@ -91,6 +91,11 @@ fi
 # React 앱 의존성 확인 및 설치
 echo ""
 echo "  React 앱 준비 중..."
+
+set -a
+source "$PROJECT_ROOT/.env" 2>/dev/null || true
+set +a
+
 cd "$REACT_DIR"
 
 if [ ! -d "node_modules" ]; then

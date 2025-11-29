@@ -7,7 +7,7 @@ from typing import Optional, Tuple, List
 from pathlib import Path
 
 from config import (
-    KAKAO_KEY, KAKAO_COORD2REGION_URL, KAKAO_COORD2ADDR_URL, 
+    KAKAO_KEY, KAKAO_COORD2REGION_URL, KAKAO_COORD2ADDR_URL,
     KAKAO_ADDRESS_URL, KAKAO_DIRECTIONS_URL
 )
 from utils.http import http_get
@@ -24,7 +24,8 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
         R = 6371  # 지구 반지름 (km)
         dlat = math.radians(lat2 - lat1)
         dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * \
+            math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
         c = 2 * math.asin(math.sqrt(a))
         return R * c
 
@@ -39,7 +40,8 @@ def kakao_coord2region(lon: float, lat: float, kakao_key: str) -> Optional[Tuple
         r = http_get(KAKAO_COORD2REGION_URL, params=params, headers=headers)
         data = r.json()
         docs = data.get("documents", [])
-        target = next((d for d in docs if d.get("region_type") == "B"), docs[0] if docs else None)
+        target = next((d for d in docs if d.get("region_type")
+                      == "B"), docs[0] if docs else None)
         if not target:
             return None
         return target.get("region_1depth_name"), target.get("region_2depth_name")
@@ -86,7 +88,7 @@ def kakao_address2coord(address: str, kakao_key: str) -> Optional[Tuple[float, f
         first = docs[0]
         lon = float(first["x"])
         lat = float(first["y"])
-        
+
         # 행정구역 정보 추출 (주소에서)
         sido = None
         sigungu = None
@@ -96,7 +98,7 @@ def kakao_address2coord(address: str, kakao_key: str) -> Optional[Tuple[float, f
         elif first.get("address"):
             sido = first["address"].get("region_1depth_name")
             sigungu = first["address"].get("region_2depth_name")
-        
+
         return (lat, lon, sido, sigungu)
     except Exception as e:
         print(f"카카오 address2coord 오류: {e}")
@@ -107,7 +109,7 @@ def get_driving_info_kakao(origin_lat: float, origin_lon: float, dest_lat: float
     """카카오 길찾기 API - 경로 및 소요 시간"""
     if not kakao_key:
         return None, None, None
-    
+
     url = KAKAO_DIRECTIONS_URL
     headers = {"Authorization": f"KakaoAK {kakao_key}"}
     params = {
@@ -115,7 +117,7 @@ def get_driving_info_kakao(origin_lat: float, origin_lon: float, dest_lat: float
         "destination": f"{dest_lon},{dest_lat}",
         "priority": "RECOMMEND",
     }
-    
+
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=5)
         if resp.status_code == 200:
@@ -126,25 +128,46 @@ def get_driving_info_kakao(origin_lat: float, origin_lon: float, dest_lat: float
                 summary = route.get("summary", {})
                 distance_m = summary.get("distance", 0)
                 duration_sec = summary.get("duration", 0)
-                
+
                 distance_km = distance_m / 1000
                 duration_min = int(duration_sec / 60)
-                
-                # 경로 좌표 추출
-                path_coords = []
+
+                # 11/29 수정: 폴리라인 안정화
+                # 경로 좌표 추출: roads.vertexes가 실제 도로를 따라가므로 우선 사용
+                path_coords: List[List[float]] = []
                 sections = route.get("sections", [])
                 for section in sections:
-                    guides = section.get("guides", [])
-                    for guide in guides:
-                        x = guide.get("x")
-                        y = guide.get("y")
-                        if x and y:
-                            path_coords.append([x, y])
-                
+                    roads = section.get("roads", [])
+                    for road in roads:
+                        vertexes = road.get("vertexes", [])
+                        # vertexes는 [x1, y1, x2, y2, ...] 순서
+                        for i in range(0, len(vertexes), 2):
+                            try:
+                                x = float(vertexes[i])
+                                y = float(vertexes[i + 1])
+                                path_coords.append([x, y])
+                            except (IndexError, ValueError, TypeError):
+                                continue
+                # roads가 없으면 guides로 폴백
+                if not path_coords:
+                    for section in sections:
+                        guides = section.get("guides", [])
+                        for guide in guides:
+                            x = guide.get("x")
+                            y = guide.get("y")
+                            if x is not None and y is not None:
+                                path_coords.append([x, y])
+                # 연속 중복 좌표 제거
+                deduped = []
+                for pt in path_coords:
+                    if not deduped or deduped[-1] != pt:
+                        deduped.append(pt)
+                path_coords = deduped
+
                 return distance_km, duration_min, path_coords
     except Exception as e:
         print(f"카카오 길찾기 API 오류: {e}")
-    
+
     return None, None, None
 
 
@@ -156,4 +179,3 @@ def guess_region_from_address(addr: Optional[str]) -> Optional[Tuple[str, str]]:
     if len(parts) >= 2:
         return parts[0], parts[1]
     return None
-
