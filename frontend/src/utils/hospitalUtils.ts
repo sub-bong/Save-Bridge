@@ -48,6 +48,12 @@ export const formatHvidate = (value?: string): string => {
  */
 export function detectPatientAgeGroup(sttText: string | null | undefined): "adult" | "pediatric" | null {
   if (!sttText) return null;
+  
+  // sttText가 문자열이 아닌 경우 처리
+  if (typeof sttText !== 'string') {
+    console.warn('detectPatientAgeGroup: sttText is not a string', typeof sttText, sttText);
+    return null;
+  }
 
   const text = sttText.toLowerCase();
 
@@ -153,6 +159,12 @@ export function detectPatientAgeGroup(sttText: string | null | undefined): "adul
  */
 export function extractPatientAge(sttText: string | null | undefined): number | undefined {
   if (!sttText) return undefined;
+  
+  // sttText가 문자열이 아닌 경우 처리
+  if (typeof sttText !== 'string') {
+    console.warn('extractPatientAge: sttText is not a string', typeof sttText, sttText);
+    return undefined;
+  }
 
   const text = sttText;
   
@@ -196,6 +208,12 @@ export function extractPatientAge(sttText: string | null | undefined): number | 
 export function extractPatientAgeDisplay(sttText: string | null | undefined): string | undefined {
   if (!sttText) return undefined;
   
+  // sttText가 문자열이 아닌 경우 처리
+  if (typeof sttText !== 'string') {
+    console.warn('extractPatientAgeDisplay: sttText is not a string', typeof sttText, sttText);
+    return undefined;
+  }
+  
   const text = sttText;
   
   // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
@@ -228,6 +246,12 @@ export function extractPatientAgeDisplay(sttText: string | null | undefined): st
  */
 export function extractPatientSex(sttText: string | null | undefined): "M" | "F" | undefined {
   if (!sttText) return undefined;
+  
+  // sttText가 문자열이 아닌 경우 처리
+  if (typeof sttText !== 'string') {
+    console.warn('extractPatientSex: sttText is not a string', typeof sttText, sttText);
+    return undefined;
+  }
 
   const text = sttText.toLowerCase();
   
@@ -261,6 +285,12 @@ export function extractPatientSex(sttText: string | null | undefined): "M" | "F"
  */
 export function extractPreKtasLevel(sttText: string | null | undefined): number | undefined {
   if (!sttText) return undefined;
+  
+  // sttText가 문자열이 아닌 경우 처리
+  if (typeof sttText !== 'string') {
+    console.warn('extractPreKtasLevel: sttText is not a string', typeof sttText, sttText);
+    return undefined;
+  }
 
   const text = sttText.toLowerCase();
   

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
-import type { ChatMessage, Hospital } from "../types";
-import { getChatSessions, getChatMessages, sendChatMessage, getChatSession, deleteChatSession, hospitalLogin, getCurrentUser, logout } from "../services/api";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import type { ChatMessage, Hospital, Coords } from "../types";
+import { getChatSessions, getChatMessages, sendChatMessage, getChatSession, deleteChatSession, hospitalLogin, getCurrentUser, logout, getImageUrl, getRoute } from "../services/api";
 import { extractPatientAgeDisplay } from "../utils/hospitalUtils";
-import { MapDisplay } from "./MapDisplay";
+import { KakaoAmbulanceMap } from "./KakaoAmbulanceMap";
 import { getSocket, disconnectSocket } from "../services/socket";
 import type { Socket } from "socket.io-client";
 
@@ -20,6 +20,11 @@ interface ChatSession {
   pre_ktas_class: string | null;
   rag_summary: string | null;
   stt_full_text?: string | null;  // STT 원문 (optional)
+  current_lat?: number | null;  // 구급대원 현재 위치 (위도)
+  current_lon?: number | null;  // 구급대원 현재 위치 (경도)
+  hospital_id?: string | null;  // 병원 ID
+  hospital_lat?: number | null;  // 병원 위도
+  hospital_lon?: number | null;  // 병원 경도
   latest_message: {
     content: string | null;
     sent_at: string | null;
@@ -57,7 +62,57 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const [isSendingMessage, setIsSendingMessage] = useState(false); // 메시지 전송 중 플래그
   const [showLogoutModal, setShowLogoutModal] = useState(false); // 로그아웃 모달 표시 여부
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
+  const [routePaths, setRoutePaths] = useState<Record<string, number[][]>>({}); // 경로 정보
+  
+  // 구급대원 위치와 병원 위치 기반으로 지도 표시용 데이터 생성
+  const mapData = useMemo(() => {
+    if (!selectedSession || !selectedSession.current_lat || !selectedSession.current_lon) {
+      return null;
+    }
+    
+    const ambulanceCoords: Coords = {
+      lat: selectedSession.current_lat,
+      lon: selectedSession.current_lon,
+    };
+    
+    const hospital: Hospital | null = selectedSession.hospital_lat && selectedSession.hospital_lon ? {
+      hpid: selectedSession.hospital_id || undefined,
+      dutyName: selectedSession.hospital_name || undefined,
+      wgs84Lat: selectedSession.hospital_lat,
+      wgs84Lon: selectedSession.hospital_lon,
+    } : null;
+    
+    return { ambulanceCoords, hospital };
+  }, [selectedSession]);
+  
+  // 경로 정보 가져오기
+  useEffect(() => {
+    if (!mapData || !mapData.hospital || !mapData.ambulanceCoords.lat || !mapData.ambulanceCoords.lon) {
+      setRoutePaths({});
+      return;
+    }
+    
+    const fetchRoute = async () => {
+      try {
+        const result = await getRoute(
+          mapData.ambulanceCoords.lat!,
+          mapData.ambulanceCoords.lon!,
+          mapData.hospital.wgs84Lat!,
+          mapData.hospital.wgs84Lon!
+        );
+        
+        if (result?.path_coords && mapData.hospital.hpid) {
+          setRoutePaths({ [mapData.hospital.hpid]: result.path_coords });
+        }
+      } catch (error) {
+        console.error("경로 정보 가져오기 실패:", error);
+        setRoutePaths({});
+      }
+    };
+    
+    fetchRoute();
+  }, [mapData]);
+  
   // 로그인 확인
   useEffect(() => {
     const checkAuth = async () => {
@@ -199,7 +254,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
           id: `msg-${msg.message_id}`,
           role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
           content: msg.content,
-          imageUrl: msg.image_url,
+          imageUrl: getImageUrl(msg.image_url), // 전체 URL로 변환
           sentAt: timeString,
         };
       });
@@ -768,16 +823,25 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                       <span className="text-[10px] text-slate-500">이미지</span>
                     </div>
                     <div className="flex-1 bg-slate-50 px-3 py-3 flex flex-col gap-2">
-                      <div className="rounded-lg overflow-hidden border border-slate-200 bg-white">
-                        <div className="h-48 bg-slate-100 flex items-center justify-center text-xs text-slate-500">
-                          지도 표시 영역
-                          <br />
-                          (구급대원 위치 및 경로)
+                      {mapData && mapData.hospital && mapData.ambulanceCoords.lat && mapData.ambulanceCoords.lon ? (
+                        <div className="rounded-lg overflow-hidden border border-slate-200 bg-white" style={{ height: '300px' }}>
+                          <KakaoAmbulanceMap
+                            coords={mapData.ambulanceCoords}
+                            hospitals={[mapData.hospital]}
+                            routePath={mapData.hospital.hpid ? (routePaths[mapData.hospital.hpid] || []) : []}
+                          />
                         </div>
-                      </div>
+                      ) : (
+                        <div className="rounded-lg overflow-hidden border border-slate-200 bg-white">
+                          <div className="h-48 bg-slate-100 flex items-center justify-center text-xs text-slate-500">
+                            위치 정보가 없습니다.
+                            <br />
+                            구급대원 위치 정보를 기다리는 중...
+                          </div>
+                        </div>
+                      )}
                       <p className="text-[10px] text-slate-500">
-                        이 영역은 실시간 네비게이션이 아니라, 구급차가 실제로 이용하는 이동 경로를
-                        캡처한 약도 이미지를 그대로 보여주기 위한 용도입니다.
+                        구급차의 현재 위치와 병원까지의 이동 경로를 표시합니다.
                       </p>
                     </div>
                   </div>

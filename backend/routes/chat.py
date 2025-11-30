@@ -212,11 +212,16 @@ def register_chat_routes(app, socketio=None):
                     "is_completed": emergency_request.is_completed if emergency_request else False,  # EmergencyRequest.is_completed 추가
                     "ems_id": ems_team.ems_id if ems_team else None,
                     "hospital_name": hospital.name if hospital else None,
+                    "hospital_id": hospital.hospital_id if hospital else None,  # 병원 ID 추가
+                    "hospital_lat": hospital.latitude if hospital else None,  # 병원 위도 추가
+                    "hospital_lon": hospital.longitude if hospital else None,  # 병원 경도 추가
                     "patient_age": emergency_request.patient_age if emergency_request else None,
                     "patient_sex": emergency_request.patient_sex if emergency_request else None,
                     "pre_ktas_class": emergency_request.pre_ktas_class if emergency_request else None,
                     "rag_summary": emergency_request.rag_summary if emergency_request else None,
                     "stt_full_text": emergency_request.stt_full_text if emergency_request else None,  # STT 원문 추가
+                    "current_lat": emergency_request.current_lat if emergency_request else None,  # 구급대원 현재 위치 (위도)
+                    "current_lon": emergency_request.current_lon if emergency_request else None,  # 구급대원 현재 위치 (경도)
                     "latest_message": {
                         "content": latest_message.content if latest_message else None,
                         "sent_at": format_datetime_with_tz(latest_message.sent_at) if latest_message else None,

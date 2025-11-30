@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """병원 조회 관련 라우트"""
 
+import re
 from flask import request, jsonify
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import (
@@ -34,6 +35,20 @@ def register_hospitals_routes(app):
             sigungu = data.get('sigungu', '')
             symptom = data.get('symptom', '')
             stt_text = data.get('stt_text')
+            
+            # 심정지 상태 감지 (심정지일 경우 거리 우선 정렬)
+            is_cardiac_arrest = False
+            if stt_text:
+                stt_lower = stt_text.lower()
+                # 심정지 키워드 확인 (Pre-KTAS 점수는 확인하지 않음)
+                cardiac_keywords = [
+                    r'cardiac\s+arrest', r'cardiopulmonary\s+arrest', r'심정지',
+                    r'\bcpr\b', r'소생술', r'심폐소생술', r'심정지\s*상태'
+                ]
+                for keyword in cardiac_keywords:
+                    if re.search(keyword, stt_lower, re.IGNORECASE):
+                        is_cardiac_arrest = True
+                        break
             
             # 증상에 따라 자동으로 병원 타입 결정
             if symptom == "다발성 외상/중증 외상":
@@ -136,15 +151,23 @@ def register_hospitals_routes(app):
                 return 0.0
             
             def sort_records(records):
-                """병원 정렬: 요구사항 점수 > 등급 우선순위 > 거리"""
-                return sorted(
-                    records,
-                    key=lambda x: (
-                        -x.get("_requirement_score", 0.0),
-                        -get_priority_score(x),
-                        x.get("distance_km", float('inf'))
+                """병원 정렬: 심정지 시 거리 우선, 그 외는 요구사항 점수 > 등급 우선순위 > 거리"""
+                # 심정지 상태면 거리만으로 정렬 (시간이 생명이므로)
+                if is_cardiac_arrest:
+                    return sorted(
+                        records,
+                        key=lambda x: x.get("distance_km", float('inf'))
                     )
-                )
+                # 그 외는 기존 로직: 요구사항 점수 > 등급 우선순위 > 거리
+                else:
+                    return sorted(
+                        records,
+                        key=lambda x: (
+                            -x.get("_requirement_score", 0.0),
+                            -get_priority_score(x),
+                            x.get("distance_km", float('inf'))
+                        )
+                    )
 
             # 지역 내 병원도 거리 제한 적용: 100km 이내만
             local_hospitals_filtered = [h for h in local_hospitals if h.get("distance_km", float('inf')) <= 100.0]
@@ -154,7 +177,11 @@ def register_hospitals_routes(app):
             nearby_secondary = [h for h in secondary_sorted if h.get("distance_km", float('inf')) <= 100.0]
             far_secondary = [h for h in secondary_sorted if h.get("distance_km", float('inf')) > 100.0]
             
-            nearby_prioritized = prioritize_by_region(nearby_secondary, max_regions=3)
+            # 심정지 상태면 거리순으로 이미 정렬되어 있으므로 지역별 그룹화 불필요
+            if is_cardiac_arrest:
+                nearby_prioritized = nearby_secondary
+            else:
+                nearby_prioritized = prioritize_by_region(nearby_secondary, max_regions=3)
             
             combined_candidates = primary_sorted + nearby_prioritized
             
@@ -183,7 +210,11 @@ def register_hospitals_routes(app):
             
             backup_candidates = [h for h in combined_candidates[3:13] if h.get("distance_km", float('inf')) <= 100.0]
 
-            nearby_neighbor = prioritize_by_region(nearby_secondary, max_regions=5)[:10]
+            # 심정지 상태면 거리순으로 이미 정렬되어 있으므로 지역별 그룹화 불필요
+            if is_cardiac_arrest:
+                nearby_neighbor = nearby_secondary[:10]
+            else:
+                nearby_neighbor = prioritize_by_region(nearby_secondary, max_regions=5)[:10]
             neighbor_candidates = nearby_neighbor
 
             fallback_sido = METRO_FALLBACK_PROVINCE.get(sido) if is_metropolitan(sido) else None
@@ -193,7 +224,12 @@ def register_hospitals_routes(app):
                 fallback_raw = fetch_scope_hospitals(fallback_sido, fallback_extra, hospital_type)
                 fallback_beds = fetch_beds_for_sidos([fallback_sido] + fallback_extra)
                 fallback_profiles = enrich_records(fallback_raw, fallback_beds, is_local_region=False)
-                fallback_hospitals.extend(prioritize_by_region(fallback_profiles, max_regions=3))
+                # 심정지 상태면 거리순 정렬만 사용
+                if is_cardiac_arrest:
+                    fallback_sorted = sort_records(fallback_profiles)
+                    fallback_hospitals.extend(fallback_sorted[:10])
+                else:
+                    fallback_hospitals.extend(prioritize_by_region(fallback_profiles, max_regions=3))
 
             used_hpids = {h.get("hpid") for h in top3}
             neighbor_augmented = []

@@ -19,7 +19,12 @@ from config import (
     TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_CALLER_NUMBER,
     OPENAI_API_KEY
 )
+"""
+Flask Application
+모듈화된 구조로 리팩토링됨
 
+Last updated: 2025-12-01
+"""
 # SQLAlchemy 모델 import
 from models import db
 
@@ -33,6 +38,7 @@ UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB 최대 파일 크기
 
+
 # CORS 설정
 CORS(app, origins=CORS_ORIGINS, supports_credentials=True, methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allow_headers=['Content-Type', 'Authorization'])
 
@@ -41,6 +47,7 @@ CORS(app, origins=CORS_ORIGINS, supports_credentials=True, methods=['GET', 'POST
 # threading 모드를 사용하면 WebSocket이 polling으로 fallback됨
 # 라우트 등록은 앱 초기화 시점에 완료되므로, monkey patch는 라우트에 영향을 주지 않음
 async_mode = None
+# async_mode 결정
 try:
     import eventlet
     async_mode = 'eventlet'
@@ -110,7 +117,7 @@ register_hospitals_routes(app)
 register_emergency_routes(app)
 register_auth_routes(app)
 register_chat_routes(app, socketio)
-register_twilio_routes(app, call_responses, call_metadata)
+register_twilio_routes(app, call_responses, call_metadata, socketio)
 
 # 서버 상태 확인 페이지
 @app.route('/')

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, ChangeEvent, useCallback } from "react";
 import type { HospitalHandoverSummary, ChatMessage, PatientTransportMeta, Hospital, Coords } from "../types";
-import { getChatMessages, sendChatMessage, completeChatSession, uploadImage } from "../services/api";
+import { getChatMessages, sendChatMessage, completeChatSession, uploadImage, getImageUrl } from "../services/api";
 import { getSocket } from "../services/socket";
 import { KakaoAmbulanceMap } from "./KakaoAmbulanceMap";
 
@@ -54,7 +54,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
       id: `msg-${msg.message_id}`,
       role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
       content: msg.content,
-      imageUrl: msg.image_url,
+      imageUrl: getImageUrl(msg.image_url), // 전체 URL로 변환
       sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
     }));
   }, []);
@@ -334,7 +334,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           id: `msg-${savedMessage.message_id}`,
           role: "PARAMEDIC",
           content: savedMessage.content,
-          imageUrl: savedMessage.image_url || imageToSend,
+          imageUrl: savedMessage.image_url ? getImageUrl(savedMessage.image_url) : (imageToSend || undefined), // 전체 URL로 변환
           sentAt: new Date(savedMessage.sent_at).toLocaleTimeString("ko-KR", {
             hour: "2-digit",
             minute: "2-digit",
