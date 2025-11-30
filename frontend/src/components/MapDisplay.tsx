@@ -13,15 +13,7 @@ interface MapDisplayProps {
   compactHeightClass?: string;
 }
 
-export const MapDisplay: React.FC<MapDisplayProps> = ({
-  coords,
-  hospitals,
-  routePaths,
-  approvedHospital,
-  resolveHospitalColor,
-  compact = false,
-  compactHeightClass,
-}) => {
+export const MapDisplay: React.FC<MapDisplayProps> = ({ coords, hospitals, routePaths, approvedHospital, resolveHospitalColor, compact = false, compactHeightClass }) => {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<L.Marker[]>([]);
@@ -77,11 +69,11 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
       const hospitalMarker = L.marker([hospital.wgs84Lat, hospital.wgs84Lon], { icon: hospitalIcon }).addTo(map);
       hospitalMarker.bindPopup(`<b>${hospital.dutyName || "병원"}</b><br/>${hospital.dutyAddr || ""}`);
       markersRef.current.push(hospitalMarker);
-      
+
       // hpid로 마커 매핑 저장 (범례 클릭 시 사용)
       const hpid = hospital.hpid || `${hospital.dutyName}-${idx}`;
       hospitalMarkersRef.current.set(hpid, hospitalMarker);
-      
+
       bounds.extend([hospital.wgs84Lat, hospital.wgs84Lon]);
 
       // 경로 표시
@@ -112,11 +104,7 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
   if (compact) {
     return (
       <div className="w-full h-full">
-        <div
-          ref={mapContainerRef}
-          className={`w-full ${compactHeightClass || "h-[260px]"} rounded-lg overflow-hidden border border-gray-200`}
-          style={{ zIndex: 0 }}
-        />
+        <div ref={mapContainerRef} className={`w-full ${compactHeightClass || "h-[260px]"} rounded-lg overflow-hidden border border-gray-200`} style={{ zIndex: 0 }} />
       </div>
     );
   }
@@ -127,35 +115,29 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
         지도
         <span className="ml-3 text-sm font-normal text-gray-600">(OpenStreetMap)</span>
       </h2>
-      <div
-        ref={mapContainerRef}
-        className="w-full h-[600px] rounded-lg overflow-hidden border-2 border-gray-300"
-        style={{ zIndex: 0 }}
-      />
+      <div ref={mapContainerRef} className="w-full h-[600px] rounded-lg overflow-hidden border-2 border-gray-300" style={{ zIndex: 0 }} />
 
       <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-700">
         <span className="flex items-center gap-2">
-          <span className="inline-block w-5 h-5 rounded-full bg-blue-700 text-white text-xs font-bold flex items-center justify-center shadow">
-            P
-          </span>
+          <span className="w-5 h-5 rounded-full bg-blue-700 text-white text-xs font-bold flex items-center justify-center shadow">P</span>
           <span>구급대원 현위치</span>
         </span>
         {hospitals.map((hospital, idx) => {
           const color = resolveHospitalColor(hospital, idx);
           const hpid = hospital.hpid || `${hospital.dutyName}-${idx}`;
-          
+
           const handleLegendClick = () => {
             if (!mapRef.current || !hospital.wgs84Lat || !hospital.wgs84Lon) return;
-            
+
             const map = mapRef.current;
             const marker = hospitalMarkersRef.current.get(hpid);
-            
+
             // 지도 중심 이동 및 확대 (zoom level 15)
             map.setView([hospital.wgs84Lat, hospital.wgs84Lon], 15, {
               animate: true,
               duration: 0.5,
             });
-            
+
             // 마커 팝업 자동 표시
             if (marker) {
               setTimeout(() => {
@@ -163,7 +145,7 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
               }, 300); // 애니메이션 완료 후 팝업 표시
             }
           };
-          
+
           return (
             <span
               key={hpid}
@@ -171,15 +153,10 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
               onClick={handleLegendClick}
               title="클릭하여 해당 병원으로 지도 이동"
             >
-              <span
-                className="inline-block w-4 h-4 rounded-full border border-white shadow"
-                style={{ backgroundColor: color }}
-              />
+              <span className="inline-block w-4 h-4 rounded-full border border-white shadow" style={{ backgroundColor: color }} />
               <span className="flex flex-col">
                 <span className="font-semibold text-gray-900">{hospital.dutyName || `병원 ${idx + 1}`}</span>
-                <span className="text-xs text-gray-500">
-                  {approvedHospital ? "환자 수용 확정 경로" : "환자 수용 거절 이력"}
-                </span>
+                <span className="text-xs text-gray-500">{approvedHospital ? "환자 수용 확정 경로" : "환자 수용 거절 이력"}</span>
               </span>
             </span>
           );
@@ -188,4 +165,3 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({
     </section>
   );
 };
-

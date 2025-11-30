@@ -196,6 +196,25 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
 
       {inputMode === "stt" && (
         <div className="mt-3 md:mt-4 flex flex-col gap-3 md:gap-4">
+          {/* 음성 인식 사용 안내 */}
+          <div className="rounded-lg border-2 border-blue-200 bg-blue-50 p-4">
+            <h3 className="text-sm md:text-base font-semibold text-slate-900 mb-2">음성 인식 사용 안내</h3>
+            <p className="text-xs md:text-sm text-slate-700 mb-3">
+              음성 인식 사용 시, 먼저 Pre-KTAS 점수를 말하고, 이어서 환자 상태 정보를 말씀해주세요.
+            </p>
+            <div className="rounded-lg border border-blue-200 bg-white p-3">
+              <p className="text-xs font-semibold text-slate-900 mb-2">사용 예시:</p>
+              <div className="space-y-2 text-[11px] md:text-xs text-slate-700 font-mono bg-slate-50 p-2 rounded border border-slate-200">
+                <p className="leading-relaxed">
+                  "Pre-KTAS 2점. 60대 남성, 뇌졸중 의심, 증상 시작 약 20분 전. 갑작스러운 언어장애와 우측 편마비 발생. 혈압 180/100, 의식 혼미."
+                </p>
+                <p className="leading-relaxed">
+                  "Pre-KTAS 1점. 심정지 상태, 심폐소생술 진행 중. 50대 남성, 도로에서 발견."
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-xs md:text-sm font-semibold text-slate-700">환자 상태 텍스트 또는 음성 인식 입력</h3>
@@ -416,16 +435,16 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
               
               if (p.id === "cardiac_arrest") {
                 presetSymptom = "심정지/심폐정지";
-                presetSttText = "심정지/심폐정지, Pre-KTAS 1점. 심정지 상태, 심폐소생술 진행 중.";
+                presetSttText = "심정지, Pre-KTAS 1점";
               } else if (p.id === "stroke") {
                 presetSymptom = "뇌졸중 의심(FAST+)";
-                presetSttText = "뇌졸중 의심(FAST+), Pre-KTAS 2점. 갑작스러운 언어장애, 우측 편마비 발생, 증상 시작 시각 20분 전 추정. 혈압 180/100, 의식 혼미. 뇌졸중 의심 소견.";
+                presetSttText = "뇌졸중 의심(FAST+), Pre-KTAS 2점";
               } else if (p.id === "stemi") {
                 presetSymptom = "심근경색 의심(STEMI)";
-                presetSttText = "심근경색 의심(STEMI), Pre-KTAS 2점. 흉통, 호흡곤란, 발한, 전신 무력감.";
+                presetSttText = "심근경색 의심(STEMI), Pre-KTAS 2점";
               } else if (p.id === "poly_trauma") {
                 presetSymptom = "다발성 외상/중증 외상";
-                presetSttText = "다발성 중증 외상, Pre-KTAS 1점. 다발성 골절, 출혈, 의식 저하.";
+                presetSttText = "다발성 중증 외상, Pre-KTAS 1점";
               }
               
               // 버튼 활성화 상태 확인
@@ -437,9 +456,29 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log("버튼 클릭됨:", p.id, presetSymptom);
+                    console.log("중증 버튼 클릭됨:", p.id, presetSymptom);
+                    console.log("현재 선택된 성별:", patientSex, "연령대:", patientAgeBand);
                     setSymptom(presetSymptom);
-                    setSttText(presetSttText);
+                    
+                    // 성별과 연령대 정보를 포함한 텍스트 생성
+                    // 형식: "{연령대} {성별} {증상}, Pre-KTAS {점수}점"
+                    let fullText = presetSttText;
+                    if (patientSex || patientAgeBand) {
+                      const sexText = patientSex === "male" ? "남성" : patientSex === "female" ? "여성" : "";
+                      const ageText = patientAgeBand || "";
+                      if (sexText || ageText) {
+                        const patientInfo = [ageText, sexText].filter(Boolean).join(" ");
+                        // 증상명 추출 (presetSttText에서 Pre-KTAS 앞부분만)
+                        const symptomPart = presetSttText.split(", Pre-KTAS")[0];
+                        const ktasPart = presetSttText.split(", Pre-KTAS")[1] || "";
+                        fullText = `${patientInfo} ${symptomPart}${ktasPart ? `, Pre-KTAS${ktasPart}` : ""}`;
+                        console.log("환자 정보 포함 텍스트 생성:", fullText);
+                      }
+                    } else {
+                      console.log("성별 또는 연령대가 선택되지 않아 기본 텍스트 사용:", fullText);
+                    }
+                    console.log("최종 sttText 설정:", fullText);
+                    setSttText(fullText);
                   }}
                   className={`text-left rounded-lg border-2 px-4 py-4 text-sm font-semibold transition-all cursor-pointer ${
                     active 

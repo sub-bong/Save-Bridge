@@ -1,9 +1,9 @@
 #!/bin/bash
-# SAFE BRIDGE React 프로젝트 통합 시작 스크립트
-# Flask 서버 (백엔드 API) + React 앱 (프론트엔드) + ngrok (선택사항)
+# SAFE BRIDGE 응급실 대시보드 실행 스크립트
+# Flask 서버 (백엔드 API) + React 앱 (응급실 대시보드 모드)
 
 echo "============================================================"
-echo " SAFE BRIDGE React 프로젝트 시작"
+echo " SAFE BRIDGE 응급실 대시보드 시작"
 echo "============================================================"
 
 # 현재 디렉토리 저장 (프로젝트 루트로 이동)
@@ -18,7 +18,6 @@ mkdir -p logs
 echo " 기존 프로세스 정리 중..."
 pkill -f "backend/app.py" 2>/dev/null
 pkill -f "app.py" 2>/dev/null
-pkill -f "ngrok.*5001" 2>/dev/null
 pkill -f "vite.*5173" 2>/dev/null
 pkill -f "node.*vite" 2>/dev/null
 sleep 2
@@ -75,8 +74,8 @@ fi
 $PYTHON_CMD -c "import flask, flask_cors, flask_socketio" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "    Flask 및 필수 패키지 설치 중..."
-    pip install --upgrade pip > /dev/null 2>&1
-    pip install -r backend/requirements.txt > /dev/null 2>&1
+    $PYTHON_CMD -m pip install --upgrade pip > /dev/null 2>&1
+    $PYTHON_CMD -m pip install -r backend/requirements.txt > /dev/null 2>&1
 fi
 
 cd backend
@@ -119,57 +118,6 @@ if [ $SERVER_STARTED -eq 0 ]; then
     exit 1
 fi
 
-# ngrok 자동 실행 (Twilio 콜백용)
-echo ""
-echo " ngrok 터널 자동 시작 (Tw1ilio 콜백용)..."
-NGROK_PATH=""
-if [ -f "./ngrok" ]; then
-    NGROK_PATH="./ngrok"
-elif [ -f "$HOME/Downloads/ngrok" ]; then
-    NGROK_PATH="$HOME/Downloads/ngrok"
-elif [ -f "/Users/sondongbin/Downloads/ngrok" ]; then
-    NGROK_PATH="/Users/sondongbin/Downloads/ngrok"
-elif command -v ngrok &> /dev/null; then
-    NGROK_PATH="ngrok"
-fi
-
-if [ -n "$NGROK_PATH" ]; then
-    echo "    ngrok 경로: $NGROK_PATH"
-    chmod +x "$NGROK_PATH" 2>/dev/null
-    nohup "$NGROK_PATH" http 5001 --log=stdout > logs/ngrok.log 2>&1 &
-    NGROK_PID=$!
-    echo "    ngrok PID: $NGROK_PID"
-    
-    sleep 5
-    echo " ngrok URL 확인 중..."
-    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | python3 -c "import sys, json; data = json.load(sys.stdin); print(data['tunnels'][0]['public_url'] if data.get('tunnels') else '')" 2>/dev/null)
-    
-    if [ -z "$NGROK_URL" ]; then
-        echo "     ngrok URL을 가져올 수 없습니다"
-        echo "    수동으로 확인: http://localhost:4040"
-        NGROK_URL="(확인 필요)"
-    else
-        echo "    ngrok URL: $NGROK_URL"
-        echo "$NGROK_URL" > logs/.ngrok_url
-        echo "    URL 저장됨: logs/.ngrok_url"
-
-        if [ -f "scripts/update_twilio_webhook.py" ]; then
-            echo "    Twilio 웹훅 업데이트 시도 중..."
-            if python3 scripts/update_twilio_webhook.py "$NGROK_URL"; then
-                echo "    Twilio VoiceUrl -> ${NGROK_URL}/twilio/gather"
-                echo "    Twilio StatusCallback -> ${NGROK_URL}/twilio/status"
-            else
-                echo "    Twilio 웹훅 업데이트 실패 (환경변수 확인 필요)"
-            fi
-        fi
-    fi
-else
-    echo "     ngrok 실행 파일을 찾지 못했습니다. (자동 건너뜀)"
-    echo "    ngrok 다운로드: https://ngrok.com/download"
-    NGROK_URL="(미사용)"
-    NGROK_PID=""
-fi
-
 # React 앱 디렉토리 확인
 REACT_DIR="frontend"
 if [ ! -d "$REACT_DIR" ]; then
@@ -193,6 +141,7 @@ echo "  React 앱 준비 중..."
 set -a
 source "$PROJECT_ROOT/.env" 2>/dev/null || true
 set +a
+
 cd "$REACT_DIR"
 
 if [ ! -d "node_modules" ]; then
@@ -205,7 +154,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # React 앱 백그라운드 실행
-echo "React 앱 시작 (포트 5173)..."
+echo "React 앱 시작 (포트 5173, 응급실 대시보드 모드)..."
 cd "$PROJECT_ROOT/$REACT_DIR"
 nohup npm run dev > ../logs/react_app.log 2>&1 &
 REACT_PID=$!
@@ -218,49 +167,44 @@ sleep 5
 if curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
     REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
     echo "    React 앱 정상 실행 중"
-    echo "    React URL: http://localhost:$REACT_PORT"
+    echo "    React URL: http://localhost:$REACT_PORT?mode=er"
 else
     echo "     React 앱 시작 확인 중... (로그 확인: tail -f logs/react_app.log)"
+    REACT_PORT="5173"
 fi
 
 # PID 저장 (종료 시 사용)
 cd "$PROJECT_ROOT"
 echo "$FLASK_PID" > .flask_pid
-if [ -n "$NGROK_PID" ]; then
-    echo "$NGROK_PID" > .ngrok_pid
-fi
 echo "$REACT_PID" > .react_pid
 
 # 서비스 정보 출력
 echo ""
 echo "============================================================"
-echo " 모든 서비스가 시작되었습니다!"
+echo " 응급실 대시보드가 시작되었습니다!"
 echo "============================================================"
 echo " Flask 서버 (백엔드 API):"
 echo "   http://localhost:5001"
-echo "   - /api/geo/coord2address"
-echo "   - /api/geo/coord2region"
-echo "   - /api/geo/address2coord"
 echo ""
-echo " React 앱 (프론트엔드):"
-echo "   http://localhost:$REACT_PORT"
+echo " 응급실 대시보드:"
+echo "   http://localhost:$REACT_PORT?mode=er"
 echo ""
-if [ "$NGROK_URL" != "(미사용)" ]; then
-    echo " ngrok 터널 (Twilio 콜백용):"
-    echo "   $NGROK_URL"
-    echo "   대시보드: http://localhost:4040"
-    echo ""
-fi
 echo " 로그 파일:"
-echo "   - Flask: tail -f flask_server.log"
-echo "   - React: tail -f react_app.log"
-if [ "$NGROK_URL" != "(미사용)" ]; then
-    echo "   - ngrok: tail -f ngrok.log"
-fi
+echo "   - Flask: tail -f logs/flask_server.log"
+echo "   - React: tail -f logs/react_app.log"
 echo ""
 echo " 서비스 종료: Ctrl+C를 누르세요"
 echo "============================================================"
 echo ""
+
+# 브라우저 자동 열기 (선택사항)
+if command -v open &> /dev/null; then
+    sleep 2
+    open "http://localhost:$REACT_PORT?mode=er" 2>/dev/null
+elif command -v xdg-open &> /dev/null; then
+    sleep 2
+    xdg-open "http://localhost:$REACT_PORT?mode=er" 2>/dev/null
+fi
 
 # 사용자 입력 대기 (Ctrl+C로 종료)
 trap 'cleanup' INT TERM
@@ -270,25 +214,21 @@ cleanup() {
     echo " 서비스 종료 중..."
     
     # 저장된 PID로 종료
-    if [ -f logs/.flask_pid ]; then
-        kill $(cat logs/.flask_pid) 2>/dev/null
+    if [ -f .flask_pid ]; then
+        kill $(cat .flask_pid) 2>/dev/null
     fi
-    if [ -f logs/.ngrok_pid ]; then
-        kill $(cat logs/.ngrok_pid) 2>/dev/null
-    fi
-    if [ -f logs/.react_pid ]; then
-        kill $(cat logs/.react_pid) 2>/dev/null
+    if [ -f .react_pid ]; then
+        kill $(cat .react_pid) 2>/dev/null
     fi
     
     # 프로세스 강제 종료
     pkill -f "backend/app.py" 2>/dev/null
     pkill -f "app.py" 2>/dev/null
-    pkill -f "ngrok.*5001" 2>/dev/null
     pkill -f "vite.*5173" 2>/dev/null
     pkill -f "node.*vite" 2>/dev/null
     
     # 임시 파일 정리
-    rm -f logs/.flask_pid logs/.ngrok_pid logs/.react_pid logs/.ngrok_url
+    rm -f .flask_pid .react_pid
     
     echo " 모든 서비스가 종료되었습니다."
     exit 0
@@ -296,3 +236,4 @@ cleanup() {
 
 # 포그라운드에서 대기 (Ctrl+C 감지)
 wait
+

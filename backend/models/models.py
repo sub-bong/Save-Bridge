@@ -35,6 +35,7 @@ class Hospital(db.Model):
     longitude = db.Column(db.Float, nullable=False)
     hospital_grade = db.Column(db.Text, nullable=True) #권역 응급, 지역응급, 외상센터
     phone_number = db.Column(db.String(50), nullable=True) #응급실 대표
+    password = db.Column(db.String(255), nullable=True) # 로그인 비밀번호 (해시 저장)
     
     # 관계 정의 (이 병원이 받은 모든 RequestAssignment)
     assignments = db.relationship('RequestAssignment', backref='hospital_info', lazy='dynamic')
@@ -108,6 +109,7 @@ class ChatSession(db.Model):
     
     started_at = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp()) # 채팅 시작 시간
     ended_at = db.Column(db.DateTime, nullable=True, default=db.func.current_timestamp()) # 채팅 종료 시간 
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False) # 소프트 삭제 플래그
 
     # 관계 정의 (이 세션에 포함된 모든 ChatMessage)
     messages = db.relationship('ChatMessage', backref='session', lazy='dynamic')
