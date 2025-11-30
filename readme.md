@@ -211,6 +211,7 @@ python scripts/seed_data.py
 
 ### 기술 스택
 - **Backend**: Flask + SQLAlchemy ORM (RESTful API)
+- **WebSocket**: Flask-SocketIO + Socket.IO-client (실시간 양방향 통신)
 - **Database**: SQLite (개발 환경) - `instance/site.db`
 - **Frontend**: React + TypeScript + Vite
 - **AI/LLM**: OpenAI (Whisper-1, GPT-4-turbo)
@@ -255,6 +256,9 @@ python scripts/seed_data.py
 - `GET /api/chat/sessions` - ChatSession 목록 조회 (응급실 대시보드용, hospital_id 필터링 가능)
 - `GET /api/chat/messages?session_id=<id>` - 채팅 메시지 조회
 - `POST /api/chat/messages` - 채팅 메시지 전송
+- `DELETE /api/chat/session/<session_id>` - 채팅 세션 삭제 (소프트 삭제)
+- `POST /api/chat/session/<session_id>/complete` - 채팅 세션 완료 처리
+- **WebSocket 이벤트**: `new_message` - 새 메시지 브로드캐스트
 
 #### 전화 (routes/telephony.py, routes/twilio.py)
 - `POST /api/telephony/call` - 전화 걸기
@@ -272,15 +276,17 @@ python scripts/seed_data.py
 - 병원 승인/거절 처리
 - 구급대원 채팅 인터페이스 (ParamedicChatSlideOver.tsx)
   - 초기 STT 메시지 자동 저장
-  - 실시간 양방향 채팅 (3초마다 자동 새로고침)
-  - 이미지 첨부 지원
+  - **WebSocket 기반 실시간 양방향 채팅** (polling fallback 지원)
+  - 이미지 첨부 지원 (작업 중)
+  - 환자 인계 완료 기능 (ems_id 확인)
 
 #### 응급실 대시보드 (ERDashboard.tsx)
 - 병원 로그인 화면 (hospital_id + password)
 - 로그인한 병원의 채팅 세션 목록 조회
-- 양방향 채팅 지원 (실시간 메시지 교환)
+- **WebSocket 기반 실시간 양방향 채팅** (polling fallback 지원)
 - 환자 정보 및 인계 체크포인트 표시
-- 세션별 메시지 자동 새로고침 (3초마다)
+- 세션 삭제 기능 (소프트 삭제)
+- 로그아웃 확인 모달
 
 ## 환경 변수 설정
 
@@ -291,6 +297,29 @@ KAKAO_REST_API_KEY=your_kakao_api_key
 DATA_GO_KR_SERVICE_KEY=your_data_go_kr_key
 OPENAI_API_KEY=your_openai_api_key
 ```
+
+## 최근 변경사항
+
+### WebSocket 실시간 채팅 구현 (2024)
+- **Flask-SocketIO** 및 **Socket.IO-client**를 사용한 실시간 양방향 채팅 구현
+- 구급대원 앱과 응급실 대시보드 간 실시간 메시지 교환
+- WebSocket 연결 실패 시 자동으로 polling으로 fallback
+- eventlet/gevent 지원으로 실제 WebSocket 연결 활성화 (설치 시)
+
+### 성능 및 안정성 개선
+- **HTTP 요청 개선**: 재시도 로직, 타임아웃 증가 (10초/30초), DNS 사전 해석
+- **eventlet monkey patch 최적화**: socket/dns 제외하여 DNS 해석 문제 해결
+- **에러 처리 개선**: 카카오 API 호출 실패 시에도 정상 응답 반환 (200)
+
+### UI/UX 개선
+- 응급실 대시보드: 세션 삭제 기능 (소프트 삭제), 로그아웃 확인 모달
+- 구급대원 앱: 환자 인계 완료 기능 (ems_id 확인)
+- 에러 메시지 개선: 불필요한 경고 제거, 실제 네트워크 오류만 표시
+
+### 서버 시작 스크립트 개선
+- Conda 환경 지원 강화
+- Python 출력 버퍼링 비활성화 (`-u` 플래그)
+- 서버 시작 확인 로직 개선 (재시도, 로그 출력)
 
 ## 라이선스
 

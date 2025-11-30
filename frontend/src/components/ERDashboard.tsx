@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { ChatMessage, Hospital } from "../types";
-import { getChatSessions, getChatMessages, sendChatMessage, getChatSession, deleteChatSession, hospitalLogin, getCurrentUser } from "../services/api";
+import { getChatSessions, getChatMessages, sendChatMessage, getChatSession, deleteChatSession, hospitalLogin, getCurrentUser, logout } from "../services/api";
 import { extractPatientAgeDisplay } from "../utils/hospitalUtils";
 import { MapDisplay } from "./MapDisplay";
+import { getSocket, disconnectSocket } from "../services/socket";
+import type { Socket } from "socket.io-client";
 
 interface ChatSession {
   session_id: number;
@@ -52,6 +54,8 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<number | null>(null);
+  const [isSendingMessage, setIsSendingMessage] = useState(false); // 메시지 전송 중 플래그
+  const [showLogoutModal, setShowLogoutModal] = useState(false); // 로그아웃 모달 표시 여부
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // 로그인 확인
@@ -105,7 +109,8 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   // 세션 목록 로드
   const loadSessions = async () => {
     if (!hospitalId) {
-      console.warn("ERDashboard: hospitalId가 없어서 세션 목록을 로드할 수 없습니다.");
+      // 초기 로딩 중이거나 로그인 전 상태일 수 있으므로 경고를 info로 변경
+      console.log("ERDashboard: hospitalId가 아직 설정되지 않았습니다. 로그인 대기 중...");
       setLoading(false);
       setRefreshing(false);
       return;
@@ -226,7 +231,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
     return () => clearInterval(interval);
   }, [hospitalId, isLoggedIn]);
 
-  // 선택된 세션 변경 시 메시지 로드
+  // 선택된 세션 변경 시 메시지 로드 및 WebSocket 연결
   useEffect(() => {
     if (!selectedSession?.session_id) {
       setMessages([]);
@@ -234,27 +239,43 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
     }
     
     const sessionId = selectedSession.session_id;
-    let isMounted = true;
+    const socket = getSocket();
     
-    // 초기 로드
+    // 초기 메시지 로드
     loadMessages(sessionId).catch(console.error);
     
-    // 메시지 자동 새로고침 (3초마다)
-    const interval = setInterval(() => {
-      if (isMounted && selectedSession?.session_id === sessionId) {
+    // WebSocket으로 세션 참여
+    socket.emit('join_session', { session_id: sessionId });
+    console.log(`✅ ERDashboard: 세션 ${sessionId}에 참여했습니다.`);
+    
+    // 새 메시지 수신 이벤트 리스너
+    const handleNewMessage = (messageData: any) => {
+      console.log('📨 ERDashboard: 새 메시지 수신:', messageData);
+      if (messageData.session_id === sessionId) {
+        // 메시지 목록 다시 로드
         loadMessages(sessionId).catch(console.error);
       }
-    }, 3000);
+    };
+    
+    socket.on('new_message', handleNewMessage);
     
     return () => {
-      isMounted = false;
-      clearInterval(interval);
+      // 세션에서 나가기
+      socket.emit('leave_session', { session_id: sessionId });
+      socket.off('new_message', handleNewMessage);
+      console.log(`👋 ERDashboard: 세션 ${sessionId}에서 나갔습니다.`);
     };
-  }, [selectedSession?.session_id]); // session_id만 의존성으로 사용하여 중복 로드 방지
+  }, [selectedSession?.session_id]);
 
   // 메시지 전송
-  const handleSendMessage = async () => {
-    const text = draftText.trim();
+  const handleSendMessage = async (textOverride?: string) => {
+    // 이미 전송 중이면 중복 전송 방지 (가장 먼저 체크)
+    if (isSendingMessage) {
+      console.warn("⚠️ 메시지 전송 중입니다. 중복 전송을 방지합니다.");
+      return;
+    }
+    
+    const text = textOverride || draftText.trim();
     if (!text) return;
     
     if (!selectedSession) {
@@ -267,9 +288,13 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
       return;
     }
 
-    // 입력 필드 초기화 (먼저 초기화하여 중복 전송 방지)
+    // 전송 시작 플래그 설정 (다른 호출 방지)
+    setIsSendingMessage(true);
+    
+    // 입력 필드 초기화 (항상 초기화하여 마지막 단어 남는 문제 해결)
     const messageToSend = text;
-    setDraftText("");
+    // textOverride가 있으면 이미 onKeyDown에서 초기화했지만, 확실히 하기 위해 다시 초기화
+    setDraftText(""); // 항상 초기화
 
     // DB에 저장
     try {
@@ -293,11 +318,13 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
       // DB 커밋이 완료될 시간을 주기 위해 약간의 지연 추가
       setTimeout(async () => {
         await loadMessages(selectedSession.session_id);
-      }, 100);
+        setIsSendingMessage(false); // 전송 완료
+      }, 200);
     } catch (error) {
       console.error("메시지 저장 실패:", error);
-      // 실패 시 입력 필드 복원
-      setDraftText(messageToSend);
+      // 실패 시에도 입력 필드는 비워둠 (사용자가 다시 입력할 수 있도록)
+      // setDraftText(""); // 이미 초기화되어 있으므로 다시 초기화할 필요 없음
+      setIsSendingMessage(false); // 전송 실패
       alert("메시지 전송에 실패했습니다. 다시 시도해주세요.");
     }
   };
@@ -351,6 +378,32 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const handleDeleteCancel = () => {
     setShowDeleteModal(false);
     setSessionToDelete(null);
+  };
+
+  // 로그아웃 모달 열기
+  const handleLogoutClick = () => {
+    setShowLogoutModal(true);
+  };
+
+  // 로그아웃 확인
+  const handleLogoutConfirm = async () => {
+    try {
+      await logout();
+      setIsLoggedIn(false);
+      setHospitalId(undefined);
+      setHospitalName("");
+      setShowLogoutModal(false);
+      // 페이지 새로고침하여 로그인 페이지로 이동
+      window.location.reload();
+    } catch (error) {
+      console.error("로그아웃 실패:", error);
+      alert("로그아웃에 실패했습니다. 다시 시도해주세요.");
+    }
+  };
+
+  // 로그아웃 취소
+  const handleLogoutCancel = () => {
+    setShowLogoutModal(false);
   };
 
   const getStatusLabel = (session: ChatSession) => {
@@ -484,11 +537,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
               <span className="text-[11px] text-slate-500">ID: {hospitalId}</span>
             )}
             <button
-              onClick={async () => {
-                setIsLoggedIn(false);
-                setHospitalId(undefined);
-                setHospitalName("");
-              }}
+              onClick={handleLogoutClick}
               className="text-[11px] text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100"
             >
               로그아웃
@@ -544,13 +593,13 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                       }`}
                     >
                       {/* 상단: 구급대원/환자 정보 + 상태 배지 */}
-                      <div className="flex items-center justify-between mb-0.5 pr-6">
-                        <div className="text-xs font-semibold text-slate-900">
+                      <div className="flex items-center justify-between mb-0.5 pr-8">
+                        <div className="text-xs font-semibold text-slate-900 flex-1 min-w-0">
                           {session.ems_id || "알 수 없음"} · {extractPatientAgeDisplay(session.stt_full_text) || (session.patient_age ? `${session.patient_age}세` : "")}{" "}
                           {getSexLabel(session.patient_sex)}
                         </div>
                         <span
-                          className={`ml-1 rounded-full px-2 py-0.5 text-[10px] border ${
+                          className={`rounded-full px-2 py-0.5 text-[10px] border flex-shrink-0 ${
                             session.is_completed === true
                               ? "border-slate-300 text-slate-600 bg-slate-50"
                               : "border-amber-400 text-amber-700 bg-amber-50"
@@ -559,18 +608,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                           {statusLabel}
                         </span>
                       </div>
-                      {/* 중간: 주증상 */}
-                      <div className="text-[11px] text-slate-600 truncate">
-                        주증상: {chiefComplaint}
-                      </div>
-                      {/* 하단: 마지막 메시지 프리뷰 + 시간 */}
-                      <div className="mt-0.5 flex items-center justify-between">
-                        <span className="text-[10px] text-slate-500 truncate max-w-[70%]">
-                          {session.latest_message?.content?.substring(0, 30) || "메시지 없음"}
-                        </span>
-                        <span className="text-[10px] text-slate-500">{formatTime(session.started_at)}</span>
-                      </div>
-                      {/* X 버튼 */}
+                      {/* X 버튼 - 목록의 가장 오른쪽 끝에 위치 */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -584,6 +622,17 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </button>
+                      {/* 중간: 주증상 */}
+                      <div className="text-[11px] text-slate-600 truncate">
+                        주증상: {chiefComplaint}
+                      </div>
+                      {/* 하단: 마지막 메시지 프리뷰 + 시간 */}
+                      <div className="mt-0.5 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 truncate max-w-[70%]">
+                          {session.latest_message?.content?.substring(0, 30) || "메시지 없음"}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{formatTime(session.started_at)}</span>
+                      </div>
                     </button>
                   );
                 })
@@ -641,21 +690,50 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                         className="flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
                         placeholder="구급대원에게 전달할 지시사항이나 질문을 입력하세요. (사진 전송은 구급대원 단말에서만 가능)"
                         value={draftText}
-                        onChange={(e) => setDraftText(e.target.value)}
+                        onChange={(e) => {
+                          // Enter 키로 인한 줄바꿈 제거 (Shift+Enter는 허용하지만, 일반 Enter는 제거)
+                          let value = e.target.value;
+                          // 줄바꿈이 있고, 마지막 문자가 줄바꿈이면 제거 (Enter 키 입력 방지)
+                          if (value.includes('\n') && value.endsWith('\n')) {
+                            // 마지막 줄바꿈 제거
+                            value = value.slice(0, -1);
+                          }
+                          setDraftText(value);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            handleSendMessage();
+                            e.stopPropagation();
+                            
+                            // 이미 전송 중이면 무시
+                            if (isSendingMessage) {
+                              console.warn("⚠️ 메시지 전송 중입니다. Enter 키 무시");
+                              return;
+                            }
+                            
+                            // Enter 키 입력 전의 현재 값을 가져옴
+                            const textToSend = draftText.trim();
+                            
+                            // 전송할 내용이 없으면 무시
+                            if (!textToSend) {
+                              return;
+                            }
+                            
+                            // 입력 필드를 즉시 초기화 (e.preventDefault()로 Enter 키 입력을 막았으므로 확실히 초기화)
+                            setDraftText("");
+                            
+                            // 즉시 전송 (textOverride로 전달하여 중복 방지)
+                            handleSendMessage(textToSend);
                           }
                         }}
                       />
                       <button
                         type="button"
-                        onClick={handleSendMessage}
-                        disabled={!draftText.trim()}
+                        onClick={() => handleSendMessage()}
+                        disabled={!draftText.trim() || isSendingMessage}
                         className="px-4 py-2 rounded-full text-sm font-semibold shadow-sm border border-slate-300 bg-slate-900 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
                       >
-                        전송
+                        {isSendingMessage ? "전송 중..." : "전송"}
                       </button>
                     </div>
                   </div>
@@ -768,6 +846,40 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                 className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {deletingSessionId !== null ? "삭제 중..." : "삭제"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 로그아웃 확인 모달 */}
+      {showLogoutModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={handleLogoutCancel}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              로그아웃
+            </h3>
+            <p className="text-gray-600 mb-6">
+              로그아웃하시겠습니까?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleLogoutCancel}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleLogoutConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition"
+              >
+                확인
               </button>
             </div>
           </div>
