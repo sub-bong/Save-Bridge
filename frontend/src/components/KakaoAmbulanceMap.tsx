@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Coords, Hospital } from "../types";
+import { ambulanceSvg } from "../svg/ambulanceSvg";
+import { hospitalSvg } from "../svg/hospitalsSvg";
+import { createWaveOverlay } from "../animation/waveOverlay";
 declare global {
   interface Window {
     kakao: any;
@@ -7,35 +10,35 @@ declare global {
 }
 
 interface Props {
-  coords: Coords; // 실시간 구급차 좌표 (watchPosition)
-  hospitals: Hospital[]; // 보통 approved 1개
-  routePath?: number[][]; // backend route_paths[hpid] (lon, lat 순서!)
-  tickMs?: number; // 애니메이션 주기
+  coords: Coords;
+  hospitals: Hospital[];
+  routePath?: number[][]; // [lon, lat]
 }
-const env = import.meta.env || {};
-const KAKAO_KEY = env.VITE_KAKAO_JS_KEY || env.VITE_KAKAO_REST_API_KEY || "";
-const sdkUrl = KAKAO_KEY 
-  ? `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_KEY}&autoload=false`
-  : "";
 
-export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePath = [], tickMs = 800 }) => {
+const env = (import.meta as any).env || {};
+const KAKAO_KEY = env.VITE_KAKAO_JS_KEY || env.VITE_KAKAO_REST_API_KEY || "";
+const sdkUrl = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_KEY}&autoload=false`;
+
+export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePath = [] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const ambRef = useRef<any>(null);
   const polyRef = useRef<any>(null);
   const hospitalMarkersRef = useRef<Map<string, any>>(new Map());
   const [ready, setReady] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const idxRef = useRef(0);
+  const [followAmbulance, setFollowAmbulance] = useState(true);
+  const recenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boundsFittedRef = useRef(false);
+  const initialLevelRef = useRef<number>(5);
+
+  const overlay = createWaveOverlay({ position: { lat: coords.lat!, lon: coords.lon! } });
 
   // SDK 로드
   useEffect(() => {
-    // API 키가 없으면 지도 사용 불가
     if (!KAKAO_KEY) {
-      console.error("❌ Kakao 지도 API 키가 설정되지 않았습니다. .env 파일에 VITE_KAKAO_JS_KEY 또는 VITE_KAKAO_REST_API_KEY를 설정해주세요.");
+      console.warn("Kakao JS 키가 비어 있습니다. VITE_KAKAO_JS_KEY를 확인하세요.");
       return;
     }
-    
     if (window.kakao?.maps) {
       setReady(true);
       return;
@@ -61,20 +64,9 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     
     const script = document.createElement("script");
     script.src = sdkUrl;
-    script.async = true;
-    script.onload = () => {
-      if (window.kakao?.maps) {
-        window.kakao.maps.load(() => {
-          console.log("✅ Kakao 지도 SDK 로드 완료");
-          setReady(true);
-        });
-      }
-    };
-    script.onerror = (error) => {
-      console.error("❌ Kakao 지도 스크립트를 불러오지 못했습니다:", error);
-      console.error("   - API 키가 올바른지 확인하세요: VITE_KAKAO_JS_KEY 또는 VITE_KAKAO_REST_API_KEY");
-      console.error("   - 네트워크 연결을 확인하세요");
-    };
+    script.onload = () => window.kakao.maps.load(() => setReady(true));
+    script.onerror = () => console.warn("Kakao 지도 스크립트를 불러오지 못했습니다. 키/도메인을 확인하세요.");
+
     document.head.appendChild(script);
     return () => {
       script.onload = null;
@@ -98,15 +90,32 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     }
     
     const { kakao } = window;
-    const center = new kakao.maps.LatLng(lat, lon);
+    const center = new kakao.maps.LatLng(coords.lat, coords.lon);
+
     if (!mapRef.current) {
       mapRef.current = new kakao.maps.Map(containerRef.current, { center, level: 5 });
-      // 구급차 마커 이미지 추가 필요
-      const ambImg = new kakao.maps.MarkerImage("https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png", new kakao.maps.Size(32, 34));
+      initialLevelRef.current = mapRef.current.getLevel();
+      const ambImg = new kakao.maps.MarkerImage(ambulanceSvg, new kakao.maps.Size(36, 36), { offset: new window.kakao.maps.Point(18, 18) });
       ambRef.current = new kakao.maps.Marker({ position: center, image: ambImg });
       ambRef.current.setMap(mapRef.current);
+      overlay?.setMap(mapRef.current);
+
+      // 사용자 조작 시 추적 중단, 10초 후 재추적
+      const markManual = () => {
+        setFollowAmbulance(false);
+        if (recenterTimerRef.current) clearTimeout(recenterTimerRef.current);
+        recenterTimerRef.current = setTimeout(() => {
+          setFollowAmbulance(true);
+          if (mapRef.current && coords.lat && coords.lon) {
+            mapRef.current.setLevel(initialLevelRef.current);
+            mapRef.current.setCenter(new kakao.maps.LatLng(coords.lat, coords.lon));
+          }
+        }, 10000);
+      };
+      kakao.maps.event.addListener(mapRef.current, "dragstart", markManual);
+      kakao.maps.event.addListener(mapRef.current, "zoom_changed", markManual);
     } else {
-      mapRef.current.setCenter(center);
+      // 중심/줌은 유지, 마커만 이동
       ambRef.current?.setPosition(center);
     }
   }, [ready, coords?.lat, coords?.lon]);
@@ -130,24 +139,15 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     
     // 새로운 병원 마커 추가
     hospitals.forEach((h) => {
-      if (!h.wgs84Lat || !h.wgs84Lon || !h.hpid) return;
-      const marker = new kakao.maps.Marker({ 
-        position: new kakao.maps.LatLng(h.wgs84Lat, h.wgs84Lon) 
-      });
-      marker.setMap(mapRef.current);
-      hospitalMarkersRef.current.set(h.hpid, marker);
-      
-      const iw = new kakao.maps.InfoWindow({ 
-        content: `<div style="padding:6px 8px;">${h.dutyName || "병원"}</div>` 
-      });
-      kakao.maps.event.addListener(marker, "click", () => {
-        iw.open(mapRef.current, marker);
-      });
+      if (!h.wgs84Lat || !h.wgs84Lon) return;
+      const hospitalImg = new kakao.maps.MarkerImage(hospitalSvg, new kakao.maps.Size(25, 52), { offset: new window.kakao.maps.Point(18, 18) });
+      const m = new kakao.maps.Marker({ position: new kakao.maps.LatLng(h.wgs84Lat, h.wgs84Lon), image: hospitalImg });
+      m.setMap(mapRef.current);
+      const iw = new kakao.maps.InfoWindow({ content: `<div style="padding:6px 8px;">${h.dutyName || "병원"}</div>` });
+      kakao.maps.event.addListener(m, "click", () => iw.open(mapRef.current, m));
     });
-    
-    // 경로 표시
-    if (routePath && routePath.length > 1) {
-      const latLngs = routePath.map(([lon, lat]) => new kakao.maps.LatLng(lat, lon)); // 순서 주의
+    if (routePath.length > 1) {
+      const latLngs = routePath.map(([lon, lat]) => new kakao.maps.LatLng(lat, lon));
       polyRef.current = new kakao.maps.Polyline({
         path: latLngs,
         strokeWeight: 5,
@@ -155,26 +155,27 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
         strokeOpacity: 0.85,
       });
       polyRef.current.setMap(mapRef.current);
-      try {
-        const bounds = new kakao.maps.LatLngBounds();
-        latLngs.forEach((latLng) => bounds.extend(latLng));
-        mapRef.current.setBounds(bounds);
-      } catch (e) {
-        console.warn("지도 bounds 설정 실패:", e);
+      // 사용자가 조작하지 않았다면 초기 1회만 경로에 맞춰 줌/센터 적용
+      if (followAmbulance && !boundsFittedRef.current) {
+        mapRef.current.setBounds(new kakao.maps.LatLngBounds(...latLngs));
+        boundsFittedRef.current = true;
       }
     }
-  }, [ready, hospitals, routePath]);
+  }, [ready, hospitals, routePath, followAmbulance]);
 
-  // 구급차 기준 실시간성 갱신
+  // 실시간 좌표 반영: 마커만 이동, 추적 모드일 때만 센터 이동
   useEffect(() => {
     if (!ready || !mapRef.current || !ambRef.current) return;
-    if (!coords?.lat || !coords?.lon) return;
-    const { kakao } = window;
-    const pos = new kakao.maps.LatLng(coords.lat, coords.lon);
+    if (!coords.lat || !coords.lon) return;
+    const pos = new window.kakao.maps.LatLng(coords.lat, coords.lon);
+    const wave = new window.kakao.maps.LatLng(coords.lat!, coords.lon!);
     ambRef.current.setPosition(pos);
-    // 필요하면 아래 줄로 센터도 GPS에 맞춰 이동
-    mapRef.current.setCenter(pos);
-  }, [ready, coords?.lat, coords?.lon]);
+    overlay?.setPosition(wave);
+
+    if (followAmbulance) {
+      mapRef.current.setCenter(pos);
+    }
+  }, [ready, coords.lat, coords.lon, followAmbulance]);
 
   // API 키가 없으면 안내 메시지 표시
   if (!KAKAO_KEY) {

@@ -568,7 +568,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   <span className="text-[10px] text-slate-500">구급차 기준</span>
                 </div>
                 {hospital ? (
-                  <KakaoAmbulanceMap coords={mapCoords} hospitals={[hospital]} routePath={mapRoutePaths[hospital.hpid || ""] || []} tickMs={800} />
+                  <KakaoAmbulanceMap coords={mapCoords} hospitals={[hospital]} routePath={mapRoutePaths[hospital.hpid || ""] || []} />
                 ) : (
                   <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
                     <div>표시할 병원 정보가 없습니다.</div>
