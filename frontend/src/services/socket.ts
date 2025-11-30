@@ -29,7 +29,9 @@ export const getSocket = (): Socket => {
     });
     
     socket.on("connect", () => {
-      console.log("✅ Socket.IO 연결 성공:", socket?.id, "Transport:", socket.io.engine.transport.name);
+      if (socket) {
+        console.log("✅ Socket.IO 연결 성공:", socket.id, "Transport:", socket.io.engine.transport.name);
+      }
     });
     
     socket.on("disconnect", (reason) => {

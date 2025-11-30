@@ -39,9 +39,12 @@ Save-Bridge/
 │   │   │   ├── SafeBridgeApp.tsx      # 구급대원 메인 앱
 │   │   │   ├── ERDashboard.tsx        # 응급실 대시보드
 │   │   │   ├── ParamedicChatSlideOver.tsx  # 구급대원 채팅
+│   │   │   ├── KakaoAmbulanceMap.tsx  # Kakao 지도 컴포넌트 (구급차 경로 표시)
+│   │   │   ├── MapDisplay.tsx         # OpenStreetMap 지도 컴포넌트
 │   │   │   └── ...
 │   │   ├── services/    # API 서비스
-│   │   │   └── api.ts   # API 클라이언트
+│   │   │   ├── api.ts   # API 클라이언트
+│   │   │   └── socket.ts # WebSocket 클라이언트 (Socket.IO)
 │   │   ├── types/       # TypeScript 타입 정의
 │   │   ├── constants/   # 상수 정의
 │   │   └── utils/       # 유틸리티
@@ -256,9 +259,14 @@ python scripts/seed_data.py
 - `GET /api/chat/sessions` - ChatSession 목록 조회 (응급실 대시보드용, hospital_id 필터링 가능)
 - `GET /api/chat/messages?session_id=<id>` - 채팅 메시지 조회
 - `POST /api/chat/messages` - 채팅 메시지 전송
+- `POST /api/chat/upload-image` - 채팅 이미지 업로드
+- `GET /uploads/images/<filename>` - 업로드된 이미지 서빙
 - `DELETE /api/chat/session/<session_id>` - 채팅 세션 삭제 (소프트 삭제)
 - `POST /api/chat/session/<session_id>/complete` - 채팅 세션 완료 처리
-- **WebSocket 이벤트**: `new_message` - 새 메시지 브로드캐스트
+- **WebSocket 이벤트**: 
+  - `new_message` - 새 메시지 브로드캐스트
+  - `join_session` - 세션 참여
+  - `leave_session` - 세션 나가기
 
 #### 전화 (routes/telephony.py, routes/twilio.py)
 - `POST /api/telephony/call` - 전화 걸기
@@ -271,55 +279,88 @@ python scripts/seed_data.py
 #### 구급대원 앱 (SafeBridgeApp.tsx)
 - 실시간 위치 기반 병원 검색
 - 증상별 최적 병원 추천
-- 병원 정보 카드 및 지도 표시
+- 병원 정보 카드 및 지도 표시 (OpenStreetMap)
 - 음성 입력 지원 (STT)
 - 병원 승인/거절 처리
 - 구급대원 채팅 인터페이스 (ParamedicChatSlideOver.tsx)
   - 초기 STT 메시지 자동 저장
   - **WebSocket 기반 실시간 양방향 채팅** (polling fallback 지원)
-  - 이미지 첨부 지원 (작업 중)
+  - **Kakao 지도 통합**: 구급차 실시간 위치 및 병원까지 경로 표시
+  - 이미지 첨부 및 전송 지원
   - 환자 인계 완료 기능 (ems_id 확인)
+  - 채팅 중 자동 닫힘 방지 (응급실과 채팅 중일 때 유지)
 
 #### 응급실 대시보드 (ERDashboard.tsx)
 - 병원 로그인 화면 (hospital_id + password)
 - 로그인한 병원의 채팅 세션 목록 조회
 - **WebSocket 기반 실시간 양방향 채팅** (polling fallback 지원)
 - 환자 정보 및 인계 체크포인트 표시
-- 세션 삭제 기능 (소프트 삭제)
+- 세션 삭제 기능 (소프트 삭제, X 버튼)
 - 로그아웃 확인 모달
+- 세션 자동 정렬 (진행 중 세션 우선, 최신순)
 
 ## 환경 변수 설정
 
 프로젝트 루트에 `.env` 파일을 생성하고 다음 변수를 설정하세요:
 
 ```
-KAKAO_REST_API_KEY=your_kakao_api_key
+# Kakao API (지도 및 경로)
+KAKAO_REST_API_KEY=your_kakao_rest_api_key
+VITE_KAKAO_JS_KEY=your_kakao_js_key  # 프론트엔드 지도용
+
+# 공공데이터포털 API
 DATA_GO_KR_SERVICE_KEY=your_data_go_kr_key
+
+# OpenAI API (STT 및 번역)
 OPENAI_API_KEY=your_openai_api_key
+
+# Twilio (전화 걸기, 선택사항)
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=your_twilio_phone_number
+
+# Flask 서버 (선택사항)
+VITE_API_BASE_URL=http://localhost:5001
 ```
 
 ## 최근 변경사항
+
+### Kakao 지도 통합 (2024)
+- **KakaoAmbulanceMap 컴포넌트**: 구급차 실시간 위치 및 병원까지 경로 표시
+- 구급대원 채팅 패널에 실시간 지도 통합
+- 구급차 마커 및 병원 마커 표시
+- 경로 polyline 표시 (Kakao Map API)
 
 ### WebSocket 실시간 채팅 구현 (2024)
 - **Flask-SocketIO** 및 **Socket.IO-client**를 사용한 실시간 양방향 채팅 구현
 - 구급대원 앱과 응급실 대시보드 간 실시간 메시지 교환
 - WebSocket 연결 실패 시 자동으로 polling으로 fallback
 - eventlet/gevent 지원으로 실제 WebSocket 연결 활성화 (설치 시)
+- 세션별 방(room) 관리로 효율적인 메시지 브로드캐스트
+
+### 이미지 업로드 기능
+- 채팅에서 이미지 첨부 및 전송 지원
+- 이미지 파일 서빙 엔드포인트 추가
+- 이미지 미리보기 및 즉시 전송 기능
+
+### UI/UX 개선
+- **구급대원 채팅 자동 닫힘 방지**: 응급실과 채팅 중일 때 채팅 패널 유지
+- 응급실 대시보드: 세션 삭제 기능 (소프트 삭제, X 버튼), 로그아웃 확인 모달
+- 구급대원 앱: 환자 인계 완료 기능 (ems_id 확인)
+- 세션 자동 정렬: 진행 중 세션 우선, 최신순 정렬
+- 에러 메시지 개선: 불필요한 경고 제거, 실제 네트워크 오류만 표시
 
 ### 성능 및 안정성 개선
 - **HTTP 요청 개선**: 재시도 로직, 타임아웃 증가 (10초/30초), DNS 사전 해석
 - **eventlet monkey patch 최적화**: socket/dns 제외하여 DNS 해석 문제 해결
 - **에러 처리 개선**: 카카오 API 호출 실패 시에도 정상 응답 반환 (200)
-
-### UI/UX 개선
-- 응급실 대시보드: 세션 삭제 기능 (소프트 삭제), 로그아웃 확인 모달
-- 구급대원 앱: 환자 인계 완료 기능 (ems_id 확인)
-- 에러 메시지 개선: 불필요한 경고 제거, 실제 네트워크 오류만 표시
+- **TypeScript 타입 안정성**: 모든 타입 에러 수정, 빌드 성공
 
 ### 서버 시작 스크립트 개선
 - Conda 환경 지원 강화
 - Python 출력 버퍼링 비활성화 (`-u` 플래그)
 - 서버 시작 확인 로직 개선 (재시도, 로그 출력)
+- 환경 변수 자동 로드 (`.env` 파일)
 
 ## 라이선스
 
