@@ -162,7 +162,8 @@ def register_auth_routes(app):
         if session.get('hospital_logged_in'):
             hospital_id = session.get('hospital_id')
             if hospital_id:
-                hospital = Hospital.query.get(hospital_id)
+                # hospital_id는 문자열이므로 filter_by 사용
+                hospital = Hospital.query.filter_by(hospital_id=hospital_id).first()
                 if hospital:
                     return jsonify({
                         "user_type": "HOSPITAL",
@@ -170,5 +171,10 @@ def register_auth_routes(app):
                         "hospital_name": hospital.name
                     }), 200
         
-        return jsonify({"error": "로그인이 필요합니다."}), 401
+        # 로그인되지 않은 경우에도 200을 반환하되, user 정보는 null
+        # 프론트엔드에서 401 에러를 처리하지 않도록 함
+        return jsonify({
+            "user_type": None,
+            "error": "로그인이 필요합니다."
+        }), 200
 

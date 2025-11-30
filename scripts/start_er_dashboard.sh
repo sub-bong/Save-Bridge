@@ -23,15 +23,39 @@ pkill -f "node.*vite" 2>/dev/null
 sleep 2
 
 # Python 가상환경 확인 및 생성
+PYTHON_CMD="python3"
 if [ -d "venv" ]; then
     echo "🐍 Python 가상환경 활성화..."
     source venv/bin/activate
+    PYTHON_CMD="python3"
+    echo " 필수 패키지 확인 중..."
+    $PYTHON_CMD -c "import flask" 2>/dev/null || {
+        echo "    패키지 설치 중..."
+        pip install --upgrade pip > /dev/null 2>&1
+        pip install -r backend/requirements.txt > /dev/null 2>&1
+    }
 elif [ -n "$CONDA_DEFAULT_ENV" ]; then
     echo "🐍 Conda 환경 사용 중: $CONDA_DEFAULT_ENV"
+    # Conda 환경의 Python 경로 사용 (conda activate 후 which python 사용)
+    if [ -n "$CONDA_PREFIX" ]; then
+        PYTHON_CMD="$CONDA_PREFIX/bin/python"
+    elif command -v conda &> /dev/null; then
+        PYTHON_CMD="$(conda run -n $CONDA_DEFAULT_ENV which python 2>/dev/null || which python3)"
+    else
+        PYTHON_CMD="$(which python3)"
+    fi
+    echo "    Python 경로: $PYTHON_CMD"
+    echo " 필수 패키지 확인 중..."
+    $PYTHON_CMD -c "import flask" 2>/dev/null || {
+        echo "    패키지 설치 중..."
+        $PYTHON_CMD -m pip install --upgrade pip > /dev/null 2>&1
+        $PYTHON_CMD -m pip install -r backend/requirements.txt > /dev/null 2>&1
+    }
 else
     echo "🐍 Python 가상환경 생성 중..."
     python3 -m venv venv
     source venv/bin/activate
+    PYTHON_CMD="python3"
     echo " 필수 패키지 설치 중..."
     pip install --upgrade pip > /dev/null 2>&1
     pip install -r backend/requirements.txt > /dev/null 2>&1
@@ -46,29 +70,51 @@ if [ ! -f "backend/app.py" ]; then
     exit 1
 fi
 
-# flask-cors 설치 확인
-python3 -c "import flask_cors" 2>/dev/null
+# Flask 및 필수 패키지 설치 확인
+$PYTHON_CMD -c "import flask, flask_cors, flask_socketio" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "    flask-cors 설치 중..."
-    pip install flask-cors > /dev/null 2>&1
+    echo "    Flask 및 필수 패키지 설치 중..."
+    $PYTHON_CMD -m pip install --upgrade pip > /dev/null 2>&1
+    $PYTHON_CMD -m pip install -r backend/requirements.txt > /dev/null 2>&1
 fi
 
 cd backend
-nohup python3 app.py > ../logs/flask_server.log 2>&1 &
+# Python의 출력 버퍼링 비활성화 (-u 옵션) 및 로그 파일에 즉시 기록
+nohup $PYTHON_CMD -u app.py > ../logs/flask_server.log 2>&1 &
 cd ..
 FLASK_PID=$!
 echo "    Flask PID: $FLASK_PID"
+echo "    Python 경로: $PYTHON_CMD"
 
-# Flask 서버 준비 대기
-sleep 3
+# Flask 서버 준비 대기 (eventlet/gevent는 시작 시간이 더 걸릴 수 있음)
+echo "    서버 시작 대기 중..."
+sleep 5
 
-# Flask 서버 확인
-if curl -s http://localhost:5001 > /dev/null; then
-    echo "    Flask 서버 정상 실행 중"
-    echo "    API URL: http://localhost:5001"
-else
+# Flask 서버 확인 (여러 번 시도)
+MAX_RETRIES=5
+RETRY_COUNT=0
+SERVER_STARTED=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -s http://localhost:5001 > /dev/null 2>&1; then
+        echo "    Flask 서버 정상 실행 중"
+        echo "    API URL: http://localhost:5001"
+        SERVER_STARTED=1
+        break
+    else
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+        if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+            echo "    서버 시작 대기 중... ($RETRY_COUNT/$MAX_RETRIES)"
+            sleep 2
+        fi
+    fi
+done
+
+if [ $SERVER_STARTED -eq 0 ]; then
     echo "    Flask 서버 시작 실패"
     echo "    로그 확인: tail -f logs/flask_server.log"
+    echo "    최근 로그:"
+    tail -20 logs/flask_server.log 2>/dev/null || echo "    (로그 파일이 비어있습니다)"
     exit 1
 fi
 

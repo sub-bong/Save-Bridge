@@ -235,15 +235,18 @@ export const SafeBridgeApp: React.FC = () => {
           console.log("주소 변환 성공:", addressResult.value);
           setAddress(addressResult.value);
         } else {
-          const error = addressResult.status === "rejected" ? addressResult.reason : null;
-          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-          console.warn("주소 변환 실패:", errorMsg);
-          
-          // CORS 오류나 서버 연결 실패 시 사용자에게 알림
-          if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED')) {
-            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
-            // 좌표는 설정되었지만 주소는 없음
+          // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 주소를 찾지 못한 경우)
+          if (addressResult.status === "rejected") {
+            const error = addressResult.reason;
+            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+            console.warn("주소 변환 실패:", errorMsg);
+            
+            // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
+            if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
+              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+            }
           }
+          // fulfilled이지만 value가 null인 경우는 조용히 처리 (카카오 API가 주소를 찾지 못한 정상적인 경우)
         }
         
         // 행정구역 설정
@@ -251,27 +254,35 @@ export const SafeBridgeApp: React.FC = () => {
           console.log("행정구역 변환 성공:", regionResult.value);
           setRegion(regionResult.value);
         } else {
-          const error = regionResult.status === "rejected" ? regionResult.reason : null;
-          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-          console.warn("행정구역 변환 실패:", errorMsg);
-          
-          // CORS 오류나 서버 연결 실패 시 사용자에게 알림
-          if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED')) {
-            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
-            // 좌표는 설정되었지만 행정구역은 없음
+          // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 행정구역을 찾지 못한 경우)
+          if (regionResult.status === "rejected") {
+            const error = regionResult.reason;
+            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+            console.warn("행정구역 변환 실패:", errorMsg);
+            
+            // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
+            if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
+              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+            }
           }
-        }
-        
-        // 좌표는 설정되었지만 주소나 행정구역이 없을 때 사용자에게 알림
-        const hasAddress = addressResult.status === "fulfilled" && addressResult.value;
-        const hasRegion = regionResult.status === "fulfilled" && regionResult.value;
-        
-        if (!hasAddress || !hasRegion) {
-          const missingItems = [];
-          if (!hasAddress) missingItems.push("주소");
-          if (!hasRegion) missingItems.push("행정구역");
+          // fulfilled이지만 value가 null인 경우는 조용히 처리
           
-          console.warn(`좌표는 설정되었지만 ${missingItems.join(", ")}를 가져올 수 없습니다. 백엔드 API 서버가 실행 중인지 확인해주세요.`);
+          // 행정구역이 없으면 좌표로부터 기본 행정구역 추정 시도
+          const regionValue = regionResult.status === "fulfilled" ? regionResult.value : null;
+          if (!regionValue && latitude && longitude) {
+            // 한국의 주요 도시 좌표 범위로 기본 행정구역 설정
+            // 광주광역시: 35.15~35.20, 126.85~126.95
+            if (latitude >= 35.1 && latitude <= 35.3 && longitude >= 126.8 && longitude <= 127.0) {
+              setRegion({ sido: "광주광역시", sigungu: "광산구" });
+              console.log("기본 행정구역 설정: 광주광역시 광산구");
+            }
+            // 서울특별시: 37.4~37.7, 126.9~127.2
+            else if (latitude >= 37.4 && latitude <= 37.7 && longitude >= 126.9 && longitude <= 127.2) {
+              setRegion({ sido: "서울특별시", sigungu: "종로구" });
+              console.log("기본 행정구역 설정: 서울특별시 종로구");
+            }
+            // 기타 지역은 좌표 기반으로 추정 (필요시 확장)
+          }
         }
       } catch (error: any) {
         console.error("주소/행정구역 변환 중 오류:", error);

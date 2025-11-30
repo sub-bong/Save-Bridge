@@ -2,9 +2,12 @@
 # -*- coding: utf-8 -*-
 """채팅 관련 라우트"""
 
-from flask import request, jsonify
+from flask import request, jsonify, send_from_directory
+from flask_socketio import emit
 from pathlib import Path
 from datetime import timezone, timedelta, datetime
+from werkzeug.utils import secure_filename
+import os
 from models import db, ChatSession, ChatMessage, RequestAssignment, EmergencyRequest, EMSTeam, Hospital
 
 # 한국 시간대 (UTC+9)
@@ -23,7 +26,7 @@ def format_datetime_with_tz(dt):
     return dt.isoformat()
 
 
-def register_chat_routes(app):
+def register_chat_routes(app, socketio=None):
     """채팅 라우트 등록"""
     
     @app.route('/api/chat/session', methods=['GET'])
@@ -445,6 +448,22 @@ def register_chat_routes(app):
                     db.session.rollback()
                     raise
                 
+                # WebSocket으로 새 메시지 브로드캐스트
+                if socketio:
+                    message_data = {
+                        "message_id": new_message.message_id,
+                        "session_id": new_message.session_id,
+                        "sender_type": new_message.sender_type,
+                        "sender_ref_id": new_message.sender_ref_id,
+                        "content": new_message.content,
+                        "image_path": new_message.image_path,
+                        "image_url": f"/uploads/images/{Path(new_message.image_path).name}" if new_message.image_path else None,
+                        "sent_at": format_datetime_with_tz(new_message.sent_at)
+                    }
+                    # 해당 세션의 모든 클라이언트에게 메시지 전송
+                    socketio.emit('new_message', message_data, room=f'session_{session_id}')
+                    print(f"📡 WebSocket으로 메시지 브로드캐스트: session_id={session_id}")
+                
                 return jsonify({
                     "message_id": new_message.message_id,
                     "session_id": new_message.session_id,
@@ -462,4 +481,100 @@ def register_chat_routes(app):
             error_detail = traceback.format_exc()
             print(f"채팅 메시지 오류: {error_detail}")
             return jsonify({"error": f"채팅 메시지 처리 중 오류가 발생했습니다: {str(e)}"}), 500
+    
+    # WebSocket 이벤트 핸들러
+    if socketio:
+        @socketio.on('connect')
+        def handle_connect():
+            """클라이언트 연결"""
+            print(f"✅ 클라이언트 연결됨: {request.sid}")
+        
+        @socketio.on('disconnect')
+        def handle_disconnect():
+            """클라이언트 연결 해제"""
+            print(f"👋 클라이언트 연결 해제됨: {request.sid}")
+        
+        @socketio.on('join_session')
+        def handle_join_session(data):
+            """클라이언트가 특정 세션에 참여"""
+            try:
+                session_id = data.get('session_id')
+                if session_id:
+                    from flask_socketio import join_room
+                    join_room(f'session_{session_id}')
+                    print(f"✅ 클라이언트 {request.sid}가 세션 {session_id}에 참여했습니다.")
+                    emit('joined', {'session_id': session_id})
+                else:
+                    print(f"⚠️ join_session: session_id가 없습니다. data={data}")
+            except Exception as e:
+                print(f"❌ join_session 오류: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        @socketio.on('leave_session')
+        def handle_leave_session(data):
+            """클라이언트가 특정 세션에서 나감"""
+            try:
+                session_id = data.get('session_id')
+                if session_id:
+                    from flask_socketio import leave_room
+                    leave_room(f'session_{session_id}')
+                    print(f"👋 클라이언트 {request.sid}가 세션 {session_id}에서 나갔습니다.")
+                    emit('left', {'session_id': session_id})
+                else:
+                    print(f"⚠️ leave_session: session_id가 없습니다. data={data}")
+            except Exception as e:
+                print(f"❌ leave_session 오류: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # 이미지 업로드 엔드포인트
+    @app.route('/api/chat/upload-image', methods=['POST'])
+    def api_upload_image():
+        """이미지 업로드 API"""
+        try:
+            if 'image' not in request.files:
+                return jsonify({"error": "이미지 파일이 없습니다."}), 400
+            
+            file = request.files['image']
+            if file.filename == '':
+                return jsonify({"error": "파일명이 없습니다."}), 400
+            
+            # 파일명 보안 처리
+            filename = secure_filename(file.filename)
+            # 타임스탬프 추가하여 중복 방지
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            name, ext = os.path.splitext(filename)
+            filename = f"{timestamp}_{name}{ext}"
+            
+            # 업로드 디렉토리 경로
+            upload_folder = app.config.get('UPLOAD_FOLDER', 'uploads/images')
+            os.makedirs(upload_folder, exist_ok=True)
+            
+            filepath = os.path.join(upload_folder, filename)
+            file.save(filepath)
+            
+            # 상대 경로 반환 (DB에 저장할 경로)
+            relative_path = f"uploads/images/{filename}"
+            
+            print(f"✅ 이미지 업로드 성공: {relative_path}")
+            return jsonify({
+                "image_path": relative_path,
+                "image_url": f"/uploads/images/{filename}"
+            }), 200
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": f"이미지 업로드 실패: {str(e)}"}), 500
+    
+    # 이미지 서빙 엔드포인트
+    @app.route('/uploads/images/<filename>')
+    def serve_image(filename):
+        """업로드된 이미지 파일 서빙"""
+        try:
+            upload_folder = app.config.get('UPLOAD_FOLDER', 'uploads/images')
+            return send_from_directory(upload_folder, filename)
+        except Exception as e:
+            return jsonify({"error": f"이미지 로드 실패: {str(e)}"}), 404
 

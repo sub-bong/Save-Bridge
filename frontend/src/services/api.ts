@@ -78,14 +78,14 @@ export const coordToAddress = async (lat: number, lon: number): Promise<string |
   try {
     const res = await axios.get(`${API_BASE_URL}/api/geo/coord2address`, {
       params: { lat, lon },
-      timeout: 5000,
+      timeout: 15000, // 타임아웃 시간 증가 (5초 → 15초)
     });
     return res.data?.address || null;
   } catch (error: any) {
     console.error("좌표 → 주소 변환 실패:", error);
-    // 네트워크 오류나 서버 오류 시 null 반환 (에러를 던지지 않음)
-    if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
-      console.warn("백엔드 서버에 연결할 수 없습니다. API 서버가 실행 중인지 확인해주세요.");
+    // 타임아웃이나 네트워크 오류 시 null 반환 (에러를 던지지 않음)
+    if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
+      console.warn("백엔드 서버에 연결할 수 없거나 응답이 지연되고 있습니다. API 서버가 실행 중인지 확인해주세요.");
     }
     return null;
   }
@@ -96,7 +96,7 @@ export const coordToRegion = async (lat: number, lon: number): Promise<Region | 
   try {
     const res = await axios.get(`${API_BASE_URL}/api/geo/coord2region`, {
       params: { lat, lon },
-      timeout: 5000,
+      timeout: 15000, // 타임아웃 시간 증가 (5초 → 15초)
     });
     if (res.data?.sido && res.data?.sigungu) {
       return {
@@ -107,9 +107,9 @@ export const coordToRegion = async (lat: number, lon: number): Promise<Region | 
     return null;
   } catch (error: any) {
     console.error("좌표 → 행정구역 변환 실패:", error);
-    // 네트워크 오류나 서버 오류 시 null 반환 (에러를 던지지 않음)
-    if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
-      console.warn("백엔드 서버에 연결할 수 없습니다. API 서버가 실행 중인지 확인해주세요.");
+    // 타임아웃이나 네트워크 오류 시 null 반환 (에러를 던지지 않음)
+    if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
+      console.warn("백엔드 서버에 연결할 수 없거나 응답이 지연되고 있습니다. API 서버가 실행 중인지 확인해주세요.");
     }
     return null;
   }
@@ -297,11 +297,13 @@ export const getCurrentUser = async (): Promise<{
     const res = await axios.get(`${API_BASE_URL}/api/auth/me`, {
       withCredentials: true,
     });
+    // user_type이 null이거나 없으면 로그인되지 않은 것으로 간주
+    if (!res.data || !res.data.user_type) {
+      return null;
+    }
     return res.data;
   } catch (error: any) {
-    if (error.response?.status === 401) {
-      return null; // 로그인되지 않음
-    }
+    // 401 에러는 더 이상 발생하지 않지만, 다른 에러는 처리
     console.error("사용자 정보 조회 실패:", error);
     return null;
   }
@@ -327,6 +329,25 @@ export const getChatMessages = async (sessionId: number): Promise<Array<{
   } catch (error: any) {
     console.error("채팅 메시지 조회 실패:", error);
     throw new Error(error.response?.data?.error || "채팅 메시지 조회 중 오류가 발생했습니다.");
+  }
+};
+
+// 이미지 업로드
+export const uploadImage = async (imageFile: File): Promise<{ image_path: string; image_url: string }> => {
+  try {
+    const formData = new FormData();
+    formData.append("image", imageFile);
+    
+    const res = await axios.post(`${API_BASE_URL}/api/chat/upload-image`, formData, {
+      withCredentials: true,
+      headers: {
+        // Content-Type을 명시하지 않아야 axios가 boundary를 자동으로 설정합니다
+      },
+    });
+    return res.data;
+  } catch (error: any) {
+    console.error("이미지 업로드 실패:", error);
+    throw new Error(error.response?.data?.error || "이미지 업로드 중 오류가 발생했습니다.");
   }
 };
 
