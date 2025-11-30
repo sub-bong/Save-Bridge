@@ -63,7 +63,14 @@ export const SafeBridgeApp: React.FC = () => {
   const [chatSession, setChatSession] = useState<HospitalHandoverSummary | null>(null);
   const [patientSex, setPatientSex] = useState<"male" | "female" | null>(null);
   const [patientAgeBand, setPatientAgeBand] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<{ team_id: number; ems_id: string; region: string | null } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ 
+    user_type: "EMS" | "HOSPITAL";
+    team_id?: number;
+    ems_id?: string;
+    region?: string | null;
+    hospital_id?: string;
+    hospital_name?: string;
+  } | null>(null);
   const [currentRequestId, setCurrentRequestId] = useState<number>(0);
   const [showLogoutModal, setShowLogoutModal] = useState<boolean>(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -231,15 +238,18 @@ export const SafeBridgeApp: React.FC = () => {
           console.log("주소 변환 성공:", addressResult.value);
           setAddress(addressResult.value);
         } else {
-          const error = addressResult.status === "rejected" ? addressResult.reason : null;
-          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-          console.warn("주소 변환 실패:", errorMsg);
-
-          // CORS 오류나 서버 연결 실패 시 사용자에게 알림
-          if (error && (error?.code === "ERR_NETWORK" || error?.message?.includes("CORS") || error?.code === "ECONNREFUSED")) {
-            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
-            // 좌표는 설정되었지만 주소는 없음
+          // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 주소를 찾지 못한 경우)
+          if (addressResult.status === "rejected") {
+            const error = addressResult.reason;
+            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+            console.warn("주소 변환 실패:", errorMsg);
+            
+            // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
+            if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
+              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+            }
           }
+          // fulfilled이지만 value가 null인 경우는 조용히 처리 (카카오 API가 주소를 찾지 못한 정상적인 경우)
         }
 
         // 행정구역 설정
@@ -247,27 +257,35 @@ export const SafeBridgeApp: React.FC = () => {
           console.log("행정구역 변환 성공:", regionResult.value);
           setRegion(regionResult.value);
         } else {
-          const error = regionResult.status === "rejected" ? regionResult.reason : null;
-          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-          console.warn("행정구역 변환 실패:", errorMsg);
-
-          // CORS 오류나 서버 연결 실패 시 사용자에게 알림
-          if (error && (error?.code === "ERR_NETWORK" || error?.message?.includes("CORS") || error?.code === "ECONNREFUSED")) {
-            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
-            // 좌표는 설정되었지만 행정구역은 없음
+          // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 행정구역을 찾지 못한 경우)
+          if (regionResult.status === "rejected") {
+            const error = regionResult.reason;
+            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+            console.warn("행정구역 변환 실패:", errorMsg);
+            
+            // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
+            if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
+              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+            }
           }
-        }
-
-        // 좌표는 설정되었지만 주소나 행정구역이 없을 때 사용자에게 알림
-        const hasAddress = addressResult.status === "fulfilled" && addressResult.value;
-        const hasRegion = regionResult.status === "fulfilled" && regionResult.value;
-
-        if (!hasAddress || !hasRegion) {
-          const missingItems = [];
-          if (!hasAddress) missingItems.push("주소");
-          if (!hasRegion) missingItems.push("행정구역");
-
-          console.warn(`좌표는 설정되었지만 ${missingItems.join(", ")}를 가져올 수 없습니다. 백엔드 API 서버가 실행 중인지 확인해주세요.`);
+          // fulfilled이지만 value가 null인 경우는 조용히 처리
+          
+          // 행정구역이 없으면 좌표로부터 기본 행정구역 추정 시도
+          const regionValue = regionResult.status === "fulfilled" ? regionResult.value : null;
+          if (!regionValue && latitude && longitude) {
+            // 한국의 주요 도시 좌표 범위로 기본 행정구역 설정
+            // 광주광역시: 35.15~35.20, 126.85~126.95
+            if (latitude >= 35.1 && latitude <= 35.3 && longitude >= 126.8 && longitude <= 127.0) {
+              setRegion({ sido: "광주광역시", sigungu: "광산구" });
+              console.log("기본 행정구역 설정: 광주광역시 광산구");
+            }
+            // 서울특별시: 37.4~37.7, 126.9~127.2
+            else if (latitude >= 37.4 && latitude <= 37.7 && longitude >= 126.9 && longitude <= 127.2) {
+              setRegion({ sido: "서울특별시", sigungu: "종로구" });
+              console.log("기본 행정구역 설정: 서울특별시 종로구");
+            }
+            // 기타 지역은 좌표 기반으로 추정 (필요시 확장)
+          }
         }
       } catch (error: any) {
         console.error("주소/행정구역 변환 중 오류:", error);
@@ -352,7 +370,10 @@ export const SafeBridgeApp: React.FC = () => {
       setRerollCount((prev) => prev + 1);
       setHospitalApprovalStatus({});
       setRejectedHospitals(new Set());
-      setApprovedHospital(null);
+      // 채팅이 열려있지 않을 때만 approvedHospital 초기화 (채팅 중이면 유지)
+      if (!isChatOpen) {
+        setApprovedHospital(null);
+      }
       setRoutePaths({});
       setBackupHospitals([]);
       setNeighborHospitals([]);
@@ -398,17 +419,22 @@ export const SafeBridgeApp: React.FC = () => {
       // EmergencyRequest 생성 (DB에 저장)
       if (currentUser && uniqueHospitals.length > 0) {
         try {
-          const patientAge = extractPatientAge(patientAgeBand);
-          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
+          // STT 텍스트에서 환자 정보 추출 (우선순위)
+          const patientAgeFromStt = extractPatientAge(sttText);
+          const patientSexFromStt = extractPatientSex(sttText);
           const preKtasLevel = extractPreKtasLevel(sttText);
-
+          
+          // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
+          const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
+          const patientSexValue = patientSexFromStt || (patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M");
+          
           const emergencyRequest = await createEmergencyRequest({
-            team_id: currentUser.team_id,
+            team_id: currentUser.team_id!,
             patient_sex: patientSexValue,
-            patient_age: patientAge || 30, // 기본값
+            patient_age: patientAge,
             pre_ktas_class: preKtasLevel || 3,
-            stt_full_text: sttText || undefined,
-            rag_summary: sbarText || undefined,
+            stt_full_text: sttText,
+            rag_summary: sbarText,
             current_lat: coords.lat!,
             current_lon: coords.lon!,
           });
@@ -658,21 +684,26 @@ export const SafeBridgeApp: React.FC = () => {
       if (!requestId && currentUser) {
         console.log("EmergencyRequest가 없어서 먼저 생성합니다...");
         try {
-          const patientAge = extractPatientAge(patientAgeBand);
-          const patientSexValue = patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M";
+          // STT 텍스트에서 환자 정보 추출 (우선순위)
+          const patientAgeFromStt = extractPatientAge(sttText);
+          const patientSexFromStt = extractPatientSex(sttText);
           const preKtasLevel = extractPreKtasLevel(sttText);
-
+          
+          // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
+          const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
+          const patientSexValue = patientSexFromStt || (patientSex === "male" ? "M" : patientSex === "female" ? "F" : "M");
+          
           if (!coords.lat || !coords.lon) {
             throw new Error("좌표 정보가 없습니다.");
           }
 
           const emergencyRequest = await createEmergencyRequest({
-            team_id: currentUser.team_id,
+            team_id: currentUser.team_id!,
             patient_sex: patientSexValue,
-            patient_age: patientAge || 30, // 기본값
+            patient_age: patientAge,
             pre_ktas_class: preKtasLevel || 3,
-            stt_full_text: sttText || undefined,
-            rag_summary: sbarText || undefined,
+            stt_full_text: sttText,
+            rag_summary: sbarText,
             current_lat: coords.lat,
             current_lon: coords.lon,
           });
@@ -1241,11 +1272,19 @@ export const SafeBridgeApp: React.FC = () => {
       </main>
 
       {/* 채팅 슬라이드 패널 */}
-      {isChatOpen && chatSession && approvedHospital && (
+      {/* 채팅이 열려있으면 approvedHospital이 없어도 유지 (응급실과의 채팅이 계속 진행 중일 수 있음) */}
+      {isChatOpen && chatSession && (
         <ParamedicChatSlideOver
           isOpen={isChatOpen}
           session={chatSession}
-          hospital={approvedHospital}
+          hospital={approvedHospital || (chatSession.hospitalName ? {
+            hpid: chatSession.requestId?.toString() || "",
+            dutyName: chatSession.hospitalName || "병원",
+            dutyEmclsName: chatSession.regionLabel || "응급의료기관",
+            dutyDivNam: chatSession.regionLabel || "응급의료기관",
+            wgs84Lat: undefined,
+            wgs84Lon: undefined,
+          } as Hospital : null!)}
           patientMeta={{
             sessionId: chatSession.id,
             patientAge: extractPatientAge(sttText),
@@ -1253,16 +1292,17 @@ export const SafeBridgeApp: React.FC = () => {
             preKtasLevel: extractPreKtasLevel(sttText),
             chiefComplaint: symptom,
             vitalsSummary: sttText ? sttText.substring(0, 200) : undefined,
-            etaMinutes: approvedHospital.eta_minutes,
+            etaMinutes: approvedHospital?.eta_minutes,
             distanceKm:
-              typeof approvedHospital.distance_km === "number"
+              approvedHospital && typeof approvedHospital.distance_km === "number"
                 ? approvedHospital.distance_km
-                : typeof approvedHospital.distance_km === "string"
+                : approvedHospital && typeof approvedHospital.distance_km === "string"
                 ? parseFloat(approvedHospital.distance_km)
                 : undefined,
             lastUpdated: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
           }}
           sttText={sttText}
+          emsId={currentUser?.ems_id} // 로그인한 구급대원의 ems_id 전달
           mapCoords={currentPos}
           mapRoutePaths={routePaths}
           // resolveHospitalColor={resolveHospitalColor}

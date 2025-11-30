@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { ChatMessage, Hospital } from "../types";
-import { getChatSessions, getChatMessages, sendChatMessage, getChatSession } from "../services/api";
+import { getChatSessions, getChatMessages, sendChatMessage, getChatSession, deleteChatSession, hospitalLogin, getCurrentUser, logout } from "../services/api";
+import { extractPatientAgeDisplay } from "../utils/hospitalUtils";
 import { MapDisplay } from "./MapDisplay";
+import { getSocket, disconnectSocket } from "../services/socket";
+import type { Socket } from "socket.io-client";
 
 interface ChatSession {
   session_id: number;
@@ -9,12 +12,14 @@ interface ChatSession {
   assignment_id: number;
   started_at: string;
   ended_at?: string;
+  is_completed?: boolean;  // EmergencyRequest.is_completed
   ems_id: string | null;
   hospital_name: string | null;
   patient_age: number | null;
   patient_sex: string | null;
   pre_ktas_class: string | null;
   rag_summary: string | null;
+  stt_full_text?: string | null;  // STT 원문 (optional)
   latest_message: {
     content: string | null;
     sent_at: string | null;
@@ -27,17 +32,18 @@ interface ERDashboardProps {
   hospitalName?: string;
 }
 
-const HOSPITAL_ID = "A1500002"; // 전남대학교병원 (실제로는 설정에서 가져올 수 있음)
-
 export const ERDashboard: React.FC<ERDashboardProps> = ({
-  hospitalId: propHospitalId, // hospitalId가 없으면 모든 세션 조회
-  hospitalName = "전남대학교병원",
+  hospitalId: propHospitalId,
+  hospitalName: propHospitalName,
 }) => {
-  // URL 파라미터에서 hospital_id 가져오기
-  const [hospitalId, setHospitalId] = useState<string | undefined>(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    return propHospitalId || urlParams.get("hospital_id") || undefined;
-  });
+  // 로그인 상태
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [hospitalId, setHospitalId] = useState<string | undefined>(propHospitalId);
+  const [hospitalName, setHospitalName] = useState<string>(propHospitalName || "");
+  const [loginHospitalId, setLoginHospitalId] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<ChatSession | null>(null);
@@ -45,17 +51,99 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const [draftText, setDraftText] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<number | null>(null);
+  const [isSendingMessage, setIsSendingMessage] = useState(false); // 메시지 전송 중 플래그
+  const [showLogoutModal, setShowLogoutModal] = useState(false); // 로그아웃 모달 표시 여부
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 로그인 확인
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (user && user.user_type === "HOSPITAL" && user.hospital_id) {
+          setHospitalId(user.hospital_id);
+          setHospitalName(user.hospital_name || "");
+          setIsLoggedIn(true);
+        } else {
+          setIsLoggedIn(false);
+        }
+      } catch (error) {
+        console.error("인증 확인 실패:", error);
+        setIsLoggedIn(false);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  // 로그인 처리
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    
+    if (!loginHospitalId || !loginPassword) {
+      setLoginError("병원 ID와 비밀번호를 입력해주세요.");
+      return;
+    }
+
+    try {
+      const result = await hospitalLogin(loginHospitalId, loginPassword);
+      console.log("ERDashboard: 로그인 성공, hospital_id:", result.hospital_id);
+      setHospitalId(result.hospital_id);
+      setHospitalName(result.hospital_name);
+      setIsLoggedIn(true);
+      setLoginPassword(""); // 보안을 위해 비밀번호 초기화
+      // 로그인 후 세션 목록 자동 로드
+      setTimeout(() => {
+        loadSessions();
+      }, 100);
+    } catch (error: any) {
+      setLoginError(error.message || "로그인에 실패했습니다.");
+    }
+  };
 
   // 세션 목록 로드
   const loadSessions = async () => {
+    if (!hospitalId) {
+      // 초기 로딩 중이거나 로그인 전 상태일 수 있으므로 경고를 info로 변경
+      console.log("ERDashboard: hospitalId가 아직 설정되지 않았습니다. 로그인 대기 중...");
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+    
     try {
       console.log("ERDashboard: 세션 목록 로드 시작, hospitalId:", hospitalId);
       const data = await getChatSessions(hospitalId);
       console.log("ERDashboard: 세션 목록 로드 완료, 세션 수:", data.length, data);
       setSessions(data);
-      if (data.length > 0 && !selectedSession) {
-        setSelectedSession(data[0]);
+      
+      // 항상 가장 최신 진행 중인 세션을 자동 선택
+      if (data.length > 0) {
+        const ongoingSessions = data.filter(s => !s.is_completed);
+        if (ongoingSessions.length > 0) {
+          // 가장 최신 진행 중인 세션 선택 (백엔드에서 최신순으로 정렬됨)
+          const latestSession = ongoingSessions[0];
+          // 선택된 세션이 변경되었거나 없으면 새로 선택
+          if (!selectedSession || selectedSession.session_id !== latestSession.session_id) {
+            setSelectedSession(latestSession);
+          } else {
+            // 같은 세션이면 업데이트만
+            setSelectedSession(latestSession);
+          }
+        } else if (data.length > 0) {
+          // 진행 중인 세션이 없으면 가장 최신 세션 선택
+          const latestSession = data[0];
+          if (!selectedSession || selectedSession.session_id !== latestSession.session_id) {
+            setSelectedSession(latestSession);
+          } else {
+            setSelectedSession(latestSession);
+          }
+        }
       }
     } catch (error) {
       console.error("세션 목록 로드 실패:", error);
@@ -69,54 +157,125 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const loadMessages = async (sessionId: number) => {
     try {
       const dbMessages = await getChatMessages(sessionId);
-      const formattedMessages: ChatMessage[] = dbMessages.map((msg) => ({
-        id: `msg-${msg.message_id}`,
-        role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
-        content: msg.content,
-        imageUrl: msg.image_url,
-        sentAt: new Date(msg.sent_at).toLocaleTimeString("ko-KR", {
+      
+      // 중복 제거: message_id 기준으로 중복 제거
+      const uniqueMessages = new Map<number, typeof dbMessages[0]>();
+      for (const msg of dbMessages) {
+        if (!uniqueMessages.has(msg.message_id)) {
+          uniqueMessages.set(msg.message_id, msg);
+        }
+      }
+      const deduplicatedMessages = Array.from(uniqueMessages.values());
+      
+      const formattedMessages: ChatMessage[] = deduplicatedMessages.map((msg) => {
+        // ISO 형식 문자열을 Date 객체로 변환
+        // 백엔드에서 KST 시간대 정보가 포함된 ISO 문자열을 보냄
+        let date: Date;
+        try {
+          // ISO 문자열 파싱 (예: "2024-11-29T23:44:00+09:00")
+          date = new Date(msg.sent_at);
+          
+          // 유효하지 않은 날짜인 경우 현재 시간 사용
+          if (isNaN(date.getTime())) {
+            console.warn("Invalid date:", msg.sent_at);
+            date = new Date();
+          }
+          
+        } catch (e) {
+          console.warn("Date parsing error:", msg.sent_at, e);
+          date = new Date();
+        }
+        
+        // 한국 시간대로 표시
+        // ISO 문자열에 시간대 정보가 포함되어 있으므로, toLocaleTimeString에서 timeZone을 명시적으로 지정
+        const timeString = date.toLocaleTimeString("ko-KR", {
           hour: "2-digit",
           minute: "2-digit",
           hour12: false,
-        }),
-      }));
+          timeZone: "Asia/Seoul",
+        });
+        
+        return {
+          id: `msg-${msg.message_id}`,
+          role: msg.sender_type === "EMS" ? "PARAMEDIC" : "ER",
+          content: msg.content,
+          imageUrl: msg.image_url,
+          sentAt: timeString,
+        };
+      });
+      
+      // message_id 기준으로 정렬 (오래된 것부터)
+      formattedMessages.sort((a, b) => {
+        const aId = parseInt(a.id.replace('msg-', ''));
+        const bId = parseInt(b.id.replace('msg-', ''));
+        return aId - bId;
+      });
+      
       setMessages(formattedMessages);
     } catch (error) {
       console.error("메시지 로드 실패:", error);
     }
   };
 
-  // 초기 로드
+  // 초기 로드 (로그인 후에만)
   useEffect(() => {
+    if (!isLoggedIn || !hospitalId) return;
+    
     console.log("ERDashboard: 초기 로드, hospitalId:", hospitalId);
     loadSessions();
-    // 주기적 새로고침 (10초마다 - 더 빠른 업데이트)
+    // 주기적 새로고침 (5초마다 - 인계 완료 상태 빠른 반영)
     const interval = setInterval(() => {
       setRefreshing(true);
       loadSessions();
-    }, 10000);
+    }, 5000);
     return () => clearInterval(interval);
-  }, [hospitalId]);
+  }, [hospitalId, isLoggedIn]);
 
-  // 선택된 세션 변경 시 메시지 로드
+  // 선택된 세션 변경 시 메시지 로드 및 WebSocket 연결
   useEffect(() => {
-    if (selectedSession && selectedSession.session_id) {
-      loadMessages(selectedSession.session_id);
-      // 메시지 자동 새로고침 (3초마다 - 더 빠른 업데이트)
-      const interval = setInterval(() => {
-        if (selectedSession && selectedSession.session_id) {
-          loadMessages(selectedSession.session_id);
-        }
-      }, 3000);
-      return () => clearInterval(interval);
-    } else {
+    if (!selectedSession?.session_id) {
       setMessages([]);
+      return;
     }
-  }, [selectedSession]);
+    
+    const sessionId = selectedSession.session_id;
+    const socket = getSocket();
+    
+    // 초기 메시지 로드
+    loadMessages(sessionId).catch(console.error);
+    
+    // WebSocket으로 세션 참여
+    socket.emit('join_session', { session_id: sessionId });
+    console.log(`✅ ERDashboard: 세션 ${sessionId}에 참여했습니다.`);
+    
+    // 새 메시지 수신 이벤트 리스너
+    const handleNewMessage = (messageData: any) => {
+      console.log('📨 ERDashboard: 새 메시지 수신:', messageData);
+      if (messageData.session_id === sessionId) {
+        // 메시지 목록 다시 로드
+        loadMessages(sessionId).catch(console.error);
+      }
+    };
+    
+    socket.on('new_message', handleNewMessage);
+    
+    return () => {
+      // 세션에서 나가기
+      socket.emit('leave_session', { session_id: sessionId });
+      socket.off('new_message', handleNewMessage);
+      console.log(`👋 ERDashboard: 세션 ${sessionId}에서 나갔습니다.`);
+    };
+  }, [selectedSession?.session_id]);
 
   // 메시지 전송
-  const handleSendMessage = async () => {
-    const text = draftText.trim();
+  const handleSendMessage = async (textOverride?: string) => {
+    // 이미 전송 중이면 중복 전송 방지 (가장 먼저 체크)
+    if (isSendingMessage) {
+      console.warn("⚠️ 메시지 전송 중입니다. 중복 전송을 방지합니다.");
+      return;
+    }
+    
+    const text = textOverride || draftText.trim();
     if (!text) return;
     
     if (!selectedSession) {
@@ -129,20 +288,13 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
       return;
     }
 
-    const newMessage: ChatMessage = {
-      id: `local-${Date.now()}`,
-      role: "ER",
-      content: text,
-      sentAt: new Date().toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }),
-    };
-
-    // 로컬 상태에 먼저 추가
-    setMessages((prev) => [...prev, newMessage]);
-    setDraftText("");
+    // 전송 시작 플래그 설정 (다른 호출 방지)
+    setIsSendingMessage(true);
+    
+    // 입력 필드 초기화 (항상 초기화하여 마지막 단어 남는 문제 해결)
+    const messageToSend = text;
+    // textOverride가 있으면 이미 onKeyDown에서 초기화했지만, 확실히 하기 위해 다시 초기화
+    setDraftText(""); // 항상 초기화
 
     // DB에 저장
     try {
@@ -150,37 +302,30 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
         session_id: selectedSession.session_id,
         sender_type: "HOSPITAL",
         sender_ref_id: hospitalId,
-        content: text,
+        content: messageToSend,
       });
       
-      const savedMessage = await sendChatMessage(
+      await sendChatMessage(
         selectedSession.session_id,
         "HOSPITAL",
         hospitalId || "A1500002", // 기본값
-        text
+        messageToSend
       );
       
-      console.log("응급실 메시지 저장 성공:", savedMessage);
+      console.log("응급실 메시지 저장 성공");
       
-      // DB에서 저장된 메시지로 업데이트
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === newMessage.id
-            ? {
-                ...msg,
-                id: `msg-${savedMessage.message_id}`,
-                sentAt: new Date(savedMessage.sent_at).toLocaleTimeString("ko-KR", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                }),
-              }
-            : msg
-        )
-      );
+      // 짧은 지연 후 DB에서 최신 메시지 목록을 다시 로드하여 중복 방지 및 정확한 시간 표시
+      // DB 커밋이 완료될 시간을 주기 위해 약간의 지연 추가
+      setTimeout(async () => {
+        await loadMessages(selectedSession.session_id);
+        setIsSendingMessage(false); // 전송 완료
+      }, 200);
     } catch (error) {
       console.error("메시지 저장 실패:", error);
-      // 실패해도 로컬 메시지는 유지
+      // 실패 시에도 입력 필드는 비워둠 (사용자가 다시 입력할 수 있도록)
+      // setDraftText(""); // 이미 초기화되어 있으므로 다시 초기화할 필요 없음
+      setIsSendingMessage(false); // 전송 실패
+      alert("메시지 전송에 실패했습니다. 다시 시도해주세요.");
     }
   };
 
@@ -189,8 +334,84 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // 세션 삭제 모달 열기
+  const handleDeleteClick = (sessionId: number, e: React.MouseEvent) => {
+    e.stopPropagation(); // 버튼 클릭 시 세션 선택 방지
+    setSessionToDelete(sessionId);
+    setShowDeleteModal(true);
+  };
+
+  // 세션 삭제 확인
+  const handleDeleteConfirm = async () => {
+    if (!sessionToDelete) return;
+
+    setDeletingSessionId(sessionToDelete);
+    try {
+      console.log("🗑️  세션 삭제 시도:", sessionToDelete);
+      await deleteChatSession(sessionToDelete);
+      console.log("✅ 세션 삭제 성공");
+      
+      // 삭제된 세션이 선택된 세션이면 선택 해제
+      if (selectedSession?.session_id === sessionToDelete) {
+        setSelectedSession(null);
+        setMessages([]);
+      }
+      // 세션 목록 새로고침
+      await loadSessions();
+      setShowDeleteModal(false);
+      setSessionToDelete(null);
+    } catch (error: any) {
+      console.error("❌ 세션 삭제 실패:", error);
+      console.error("❌ 에러 상세:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+      const errorMessage = error.response?.data?.error || error.message || "알 수 없는 오류";
+      alert(`세션 삭제 실패: ${errorMessage}`);
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
+  // 삭제 모달 닫기
+  const handleDeleteCancel = () => {
+    setShowDeleteModal(false);
+    setSessionToDelete(null);
+  };
+
+  // 로그아웃 모달 열기
+  const handleLogoutClick = () => {
+    setShowLogoutModal(true);
+  };
+
+  // 로그아웃 확인
+  const handleLogoutConfirm = async () => {
+    try {
+      await logout();
+      setIsLoggedIn(false);
+      setHospitalId(undefined);
+      setHospitalName("");
+      setShowLogoutModal(false);
+      // 페이지 새로고침하여 로그인 페이지로 이동
+      window.location.reload();
+    } catch (error) {
+      console.error("로그아웃 실패:", error);
+      alert("로그아웃에 실패했습니다. 다시 시도해주세요.");
+    }
+  };
+
+  // 로그아웃 취소
+  const handleLogoutCancel = () => {
+    setShowLogoutModal(false);
+  };
+
   const getStatusLabel = (session: ChatSession) => {
-    return session.ended_at ? "인계 완료" : "인계 진행 중";
+    // EmergencyRequest.is_completed가 true면 인계 완료
+    if (session.is_completed === true) {
+      return "인계 완료";
+    }
+    return "인계 진행 중";
   };
 
   const getSexLabel = (sex: string | null) => {
@@ -202,13 +423,87 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const formatTime = (timeStr: string | null) => {
     if (!timeStr) return "";
     const date = new Date(timeStr);
+    // 한국 시간대로 변환하여 표시
     return date.toLocaleTimeString("ko-KR", {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
+      timeZone: "Asia/Seoul",
     });
   };
 
+  // 인증 확인 중
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600"></div>
+          <p className="mt-4 text-slate-600">로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 로그인하지 않은 경우 로그인 화면 표시
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8">
+          <div className="text-center mb-8">
+            <h1 className="text-2xl font-bold text-slate-900 mb-2">SAFE BRIDGE</h1>
+            <p className="text-sm text-slate-600">응급실 인계 채팅 대시보드</p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label htmlFor="hospital_id" className="block text-sm font-medium text-slate-700 mb-1">
+                병원 ID
+              </label>
+              <input
+                id="hospital_id"
+                type="text"
+                value={loginHospitalId}
+                onChange={(e) => setLoginHospitalId(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="병원 ID를 입력하세요"
+                required
+              />
+            </div>
+            
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1">
+                비밀번호
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="비밀번호를 입력하세요"
+                required
+              />
+            </div>
+            
+            {loginError && (
+              <div className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg">
+                {loginError}
+              </div>
+            )}
+            
+            <button
+              type="submit"
+              className="w-full py-2 px-4 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-colors"
+            >
+              로그인
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // 로딩 중
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -221,201 +516,375 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      {/* 왼쪽: 인계 채팅 목록 */}
-      <aside className="w-80 bg-white border-r border-slate-200 flex flex-col">
-        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
-          <h1 className="text-sm font-bold text-slate-900">SAFE BRIDGE 응급실 인계 채팅 대시보드</h1>
-          <p className="text-xs text-slate-600 mt-1">구급대원별 세션 단위</p>
-          {hospitalId && (
-            <p className="text-xs text-slate-500 mt-1">병원 ID: {hospitalId}</p>
-          )}
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-xs text-slate-500">총 {sessions.length}건</span>
-            <button
-              onClick={() => {
-                setRefreshing(true);
-                loadSessions();
-              }}
-              className="text-xs text-emerald-600 hover:text-emerald-700"
-              disabled={refreshing}
-            >
-              {refreshing ? "새로고침 중..." : "새로고침"}
-            </button>
+    <div className="h-screen w-full bg-slate-100 flex">
+      <div className="flex flex-col flex-1 max-w-6xl mx-auto my-4 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+        {/* 상단 헤더 */}
+        <header className="h-12 flex items-center justify-between px-4 border-b border-slate-200 bg-slate-50">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold tracking-wide text-sky-700 uppercase">
+              SAFE BRIDGE
+            </span>
+            <span className="w-px h-4 bg-slate-300" />
+            <span className="text-sm font-semibold text-slate-900">
+              응급실 인계 채팅 대시보드
+            </span>
           </div>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {sessions.length === 0 ? (
-            <div className="p-4 text-center text-sm text-slate-500">
-              진행 중인 인계 채팅이 없습니다.
+          <div className="flex items-center gap-3">
+            {hospitalName && (
+              <span className="text-[11px] text-slate-600">{hospitalName}</span>
+            )}
+            {hospitalId && (
+              <span className="text-[11px] text-slate-500">ID: {hospitalId}</span>
+            )}
+            <button
+              onClick={handleLogoutClick}
+              className="text-[11px] text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-100"
+            >
+              로그아웃
+            </button>
+            <div className="text-[11px] text-slate-500">
+              현재 화면은 응급실 의료진 전용 · 사진 업로드는 구급대원 단말에서만 가능
             </div>
-          ) : (
-            sessions.map((session) => (
-              <button
-                key={session.session_id}
-                onClick={() => setSelectedSession(session)}
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors ${
-                  selectedSession?.session_id === session.session_id ? "bg-emerald-50 border-l-4 border-l-emerald-600" : ""
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-semibold text-slate-900">
-                    {session.ems_id || "알 수 없음"}
-                  </span>
-                  <span className="text-xs text-slate-500">{formatTime(session.started_at)}</span>
-                </div>
-                <div className="text-xs text-slate-600 mb-1">
-                  {session.patient_age ? `${session.patient_age}세` : ""} {getSexLabel(session.patient_sex)}
-                </div>
-                {session.rag_summary && (
-                  <div className="text-xs text-slate-700 mb-1 truncate">{session.rag_summary}</div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full ${
-                      session.ended_at
-                        ? "bg-slate-100 text-slate-600"
-                        : "bg-emerald-100 text-emerald-700"
-                    }`}
-                  >
-                    {getStatusLabel(session)}
-                  </span>
-                  {session.latest_message && (
-                    <span className="text-xs text-slate-400 truncate max-w-[120px]">
-                      {session.latest_message.content?.substring(0, 20)}...
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      </aside>
+          </div>
+        </header>
 
-      {/* 중간: 채팅 영역 */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {selectedSession ? (
-          <>
-            {/* 채팅 헤더 */}
-            <div className="px-4 py-3 border-b border-slate-200 bg-white">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900">
-                    구급대원 {selectedSession.ems_id || "알 수 없음"}와의 인계 채팅
-                  </h2>
-                  <div className="text-xs text-slate-500 mt-1">
-                    {selectedSession.patient_age ? `${selectedSession.patient_age}세` : ""}{" "}
-                    {getSexLabel(selectedSession.patient_sex)} · Pre-KTAS{" "}
-                    {selectedSession.pre_ktas_class || "-"}점
+        <div className="flex flex-1 min-h-0 divide-x divide-slate-200">
+          {/* 왼쪽: 인계 채팅 목록 */}
+          <aside className="w-64 flex flex-col bg-slate-50 min-h-0">
+            <div className="px-3 py-2 border-b border-slate-200 flex-shrink-0">
+              <div className="text-xs font-semibold text-slate-700 mb-1">
+                인계 채팅 목록
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>구급대원별 세션 단위</span>
+                <div className="flex items-center gap-2">
+                  <span>총 {sessions.length}건</span>
+                  <button
+                    onClick={() => {
+                      setRefreshing(true);
+                      loadSessions();
+                    }}
+                    className="text-emerald-600 hover:text-emerald-700 disabled:opacity-50"
+                    disabled={refreshing}
+                  >
+                    {refreshing ? "새로고침 중..." : "새로고침"}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {sessions.length === 0 ? (
+                <div className="p-4 text-center text-[11px] text-slate-500">
+                  진행 중인 인계 채팅이 없습니다.
+                </div>
+              ) : (
+                sessions.map((session) => {
+                  const isSelected = selectedSession?.session_id === session.session_id;
+                  const statusLabel = getStatusLabel(session);
+                  const chiefComplaint = session.rag_summary || "증상 정보 없음";
+                  
+                  return (
+                    <button
+                      key={session.session_id}
+                      type="button"
+                      onClick={() => setSelectedSession(session)}
+                      className={`relative w-full text-left px-3 py-2 border-b border-slate-100 hover:bg-sky-50 focus:outline-none transition ${
+                        isSelected ? "bg-sky-50" : "bg-transparent"
+                      }`}
+                    >
+                      {/* 상단: 구급대원/환자 정보 + 상태 배지 */}
+                      <div className="flex items-center justify-between mb-0.5 pr-8">
+                        <div className="text-xs font-semibold text-slate-900 flex-1 min-w-0">
+                          {session.ems_id || "알 수 없음"} · {extractPatientAgeDisplay(session.stt_full_text) || (session.patient_age ? `${session.patient_age}세` : "")}{" "}
+                          {getSexLabel(session.patient_sex)}
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] border flex-shrink-0 ${
+                            session.is_completed === true
+                              ? "border-slate-300 text-slate-600 bg-slate-50"
+                              : "border-amber-400 text-amber-700 bg-amber-50"
+                          }`}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+                      {/* X 버튼 - 목록의 가장 오른쪽 끝에 위치 */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteClick(session.session_id, e);
+                        }}
+                        disabled={deletingSessionId === session.session_id}
+                        className="absolute top-2 right-2 text-slate-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed z-10"
+                        title="세션 삭제"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                      {/* 중간: 주증상 */}
+                      <div className="text-[11px] text-slate-600 truncate">
+                        주증상: {chiefComplaint}
+                      </div>
+                      {/* 하단: 마지막 메시지 프리뷰 + 시간 */}
+                      <div className="mt-0.5 flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 truncate max-w-[70%]">
+                          {session.latest_message?.content?.substring(0, 30) || "메시지 없음"}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{formatTime(session.started_at)}</span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+
+          {/* 중간: 채팅 패널 */}
+          <section className="flex-1 flex flex-col min-w-[420px]">
+            {selectedSession ? (
+              <>
+                <div className="px-4 py-2 border-b border-slate-200 bg-white">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-slate-900">
+                        구급대원 {selectedSession.ems_id || "알 수 없음"}와의 인계 채팅
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-500">
+                        {extractPatientAgeDisplay(selectedSession.stt_full_text) || (selectedSession.patient_age ? `${selectedSession.patient_age}세` : "")}{" "}
+                        {getSexLabel(selectedSession.patient_sex)} · 주증상: {selectedSession.rag_summary || "정보 없음"}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => handleDeleteClick(selectedSession.session_id, e)}
+                      disabled={deletingSessionId === selectedSession.session_id}
+                      className="text-slate-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="세션 삭제"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    상태: {getStatusLabel(selectedSession)}
                   </div>
                 </div>
-                <span
-                  className={`text-xs px-2 py-1 rounded-full ${
-                    selectedSession.ended_at
-                      ? "bg-slate-100 text-slate-600"
-                      : "bg-emerald-100 text-emerald-700"
-                  }`}
-                >
-                  {getStatusLabel(selectedSession)}
-                </span>
-              </div>
-            </div>
 
-            {/* 메시지 영역 */}
-            <div className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
-              {messages.map((msg) => (
-                <ERMessageBubble key={msg.id} message={msg} />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* 메시지 입력 */}
-            <div className="border-t border-slate-200 bg-white px-4 py-3">
-              <div className="flex items-center gap-2">
-                <div className="flex-1">
-                  <textarea
-                    rows={1}
-                    className="w-full bg-transparent text-sm leading-snug text-slate-900 placeholder:text-slate-400 focus:outline-none resize-none border border-emerald-500 rounded-xl px-3 py-2"
-                    placeholder="구급대원에게 전달할 지시사항이나 질문을 입력하세요. (사진 전송은 구급대원 단말에서만 가능)"
-                    value={draftText}
-                    onChange={(e) => setDraftText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
-                  />
+                <div className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
+                  {messages.map((msg) => (
+                    <ERMessageBubble key={msg.id} message={msg} />
+                  ))}
+                  <div ref={messagesEndRef} />
                 </div>
-                <button
-                  type="button"
-                  onClick={handleSendMessage}
-                  disabled={!draftText.trim()}
-                  className="h-10 px-4 rounded-xl text-sm font-semibold shadow-sm border border-slate-300 bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-emerald-700"
-                >
-                  전송
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-500">
-            채팅 세션을 선택해주세요.
-          </div>
-        )}
-      </main>
 
-      {/* 오른쪽: 구급대원 위치/도착 예상 */}
-      <aside className="w-96 bg-white border-l border-slate-200 flex flex-col">
-        {selectedSession ? (
-          <>
-            <div className="px-3 py-2 border-b border-slate-200 bg-slate-50">
-              <div className="text-xs font-semibold text-slate-700 mb-1">구급대원 위치/도착 예상</div>
-              <span
-                className={`text-xs px-2 py-1 rounded-full inline-block ${
-                  selectedSession.ended_at
-                    ? "bg-slate-100 text-slate-600"
-                    : "bg-emerald-100 text-emerald-700"
-                }`}
+                {selectedSession.is_completed === true ? (
+                  <div className="border-t border-slate-200 bg-slate-50 px-4 py-2 text-[11px] text-slate-500 text-center">
+                    해당 환자는 인계가 완료된 세션입니다. 추가 채팅 입력은 불가능합니다.
+                  </div>
+                ) : (
+                  <div className="border-t border-slate-200 bg-white px-4 py-2">
+                    <div className="flex items-end gap-2">
+                      <textarea
+                        rows={2}
+                        className="flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                        placeholder="구급대원에게 전달할 지시사항이나 질문을 입력하세요. (사진 전송은 구급대원 단말에서만 가능)"
+                        value={draftText}
+                        onChange={(e) => {
+                          // Enter 키로 인한 줄바꿈 제거 (Shift+Enter는 허용하지만, 일반 Enter는 제거)
+                          let value = e.target.value;
+                          // 줄바꿈이 있고, 마지막 문자가 줄바꿈이면 제거 (Enter 키 입력 방지)
+                          if (value.includes('\n') && value.endsWith('\n')) {
+                            // 마지막 줄바꿈 제거
+                            value = value.slice(0, -1);
+                          }
+                          setDraftText(value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            
+                            // 이미 전송 중이면 무시
+                            if (isSendingMessage) {
+                              console.warn("⚠️ 메시지 전송 중입니다. Enter 키 무시");
+                              return;
+                            }
+                            
+                            // Enter 키 입력 전의 현재 값을 가져옴
+                            const textToSend = draftText.trim();
+                            
+                            // 전송할 내용이 없으면 무시
+                            if (!textToSend) {
+                              return;
+                            }
+                            
+                            // 입력 필드를 즉시 초기화 (e.preventDefault()로 Enter 키 입력을 막았으므로 확실히 초기화)
+                            setDraftText("");
+                            
+                            // 즉시 전송 (textOverride로 전달하여 중복 방지)
+                            handleSendMessage(textToSend);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage()}
+                        disabled={!draftText.trim() || isSendingMessage}
+                        className="px-4 py-2 rounded-full text-sm font-semibold shadow-sm border border-slate-300 bg-slate-900 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
+                      >
+                        {isSendingMessage ? "전송 중..." : "전송"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-slate-500">
+                채팅 세션을 선택해주세요.
+              </div>
+            )}
+          </section>
+
+          {/* 오른쪽: 구급대원 위치/도착 예상 */}
+          <aside className="w-80 flex flex-col bg-slate-50">
+            {selectedSession ? (
+              <>
+                <div className="px-3 py-2 border-b border-slate-200 bg-slate-50">
+                  <div className="text-xs font-semibold text-slate-700 mb-1">
+                    구급대원 위치 / 도착 예상
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    채팅방 기준 · 구급대원 {selectedSession.ems_id || "알 수 없음"}
+                  </div>
+                </div>
+                <div className="p-3 flex-1 flex flex-col gap-3">
+                  {/* 1. 구급차 이동 경로 약도 이미지 */}
+                  <div className="flex-1 rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col text-[11px] text-slate-700">
+                    <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-800">
+                        구급차 이동 경로 (약도)
+                      </span>
+                      <span className="text-[10px] text-slate-500">이미지</span>
+                    </div>
+                    <div className="flex-1 bg-slate-50 px-3 py-3 flex flex-col gap-2">
+                      <div className="rounded-lg overflow-hidden border border-slate-200 bg-white">
+                        <div className="h-48 bg-slate-100 flex items-center justify-center text-xs text-slate-500">
+                          지도 표시 영역
+                          <br />
+                          (구급대원 위치 및 경로)
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        이 영역은 실시간 네비게이션이 아니라, 구급차가 실제로 이용하는 이동 경로를
+                        캡처한 약도 이미지를 그대로 보여주기 위한 용도입니다.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 2. ETA 카드 - 예상 도착 시간 */}
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-semibold">예상 도착 시간</span>
+                      <span className="text-[11px] text-slate-500">
+                        {new Date().toLocaleTimeString("ko-KR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: false,
+                          timeZone: "Asia/Seoul",
+                        })} 기준
+                      </span>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-semibold text-slate-900">-</span>
+                      <span className="text-[11px] text-slate-600">분 후 도착 예상</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">
+                      남은 거리 약 - km
+                    </div>
+                  </div>
+
+                  {/* 3. 인계 체크 포인트 */}
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700">
+                    <div className="font-semibold mb-1">인계 체크 포인트</div>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>Pre-KTAS/KTAS 등급 확인</li>
+                      <li>혈압/맥박/호흡/산소포화도 최신 수치 반영 여부</li>
+                      <li>필요 시 도착 전 추가 검사 또는 처치 지시</li>
+                    </ul>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+                세션을 선택하면 상세 정보가 표시됩니다.
+              </div>
+            )}
+          </aside>
+        </div>
+      </div>
+
+      {/* 삭제 확인 모달 */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">채팅 세션 삭제</h3>
+            <p className="text-sm text-slate-600 mb-6">
+              정말 이 채팅 세션을 삭제하시겠습니까?<br />
+              삭제된 세션은 목록에서만 숨겨지며, 데이터는 보관됩니다.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={handleDeleteCancel}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
               >
-                {getStatusLabel(selectedSession)}
-              </span>
+                취소
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={deletingSessionId !== null}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deletingSessionId !== null ? "삭제 중..." : "삭제"}
+              </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-3">
-              {/* 지도 영역 (간단한 플레이스홀더) */}
-              <div className="rounded-xl border border-slate-200 bg-slate-100 h-64 mb-3 flex items-center justify-center text-xs text-slate-500">
-                지도 표시 영역
-                <br />
-                (구급대원 위치 및 경로)
-              </div>
-
-              {/* 도착 예상 시간 */}
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-800 mb-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold">예상 도착 시간</span>
-                  <span className="text-xs text-slate-500">{formatTime(new Date().toISOString())}</span>
-                </div>
-                <div className="text-2xl font-semibold text-slate-900 mb-1">-</div>
-                <div className="text-xs text-slate-600">남은 거리 약 - km</div>
-              </div>
-
-              {/* 인계 체크포인트 */}
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700">
-                <div className="font-semibold mb-2">인계 체크포인트</div>
-                <ul className="list-disc list-inside space-y-1 text-xs">
-                  <li>Pre-KTAS/KTAS 등급 확인</li>
-                  <li>혈압/맥박/호흡/산소포화도 최신 수치 반영 여부</li>
-                  <li>필요 시 도착 전 추가 검사 또는 처치 지시</li>
-                </ul>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-            세션을 선택하면 상세 정보가 표시됩니다.
           </div>
-        )}
-      </aside>
+        </div>
+      )}
+
+      {/* 로그아웃 확인 모달 */}
+      {showLogoutModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={handleLogoutCancel}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              로그아웃
+            </h3>
+            <p className="text-gray-600 mb-6">
+              로그아웃하시겠습니까?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleLogoutCancel}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleLogoutConfirm}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -434,22 +903,27 @@ const ERMessageBubble: React.FC<ERMessageBubbleProps> = ({ message }) => {
       <div
         className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
           isER
-            ? "bg-emerald-600 text-white rounded-br-sm"
+            ? "bg-sky-600 text-white rounded-br-sm"
             : "bg-white text-slate-900 border border-slate-200 rounded-bl-sm"
         }`}
       >
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold opacity-80">{senderLabel}</span>
+          <span className="text-[11px] font-semibold opacity-80">{senderLabel}</span>
           <span className="text-[10px] opacity-60">{message.sentAt}</span>
         </div>
-        {message.content && <p className="whitespace-pre-wrap leading-snug">{message.content}</p>}
+        {message.content && (
+          <p className="whitespace-pre-wrap leading-snug">{message.content}</p>
+        )}
         {message.imageUrl && (
           <div className="mt-2">
             <img
               src={message.imageUrl}
-              alt="전송 이미지"
+              alt="구급대원 전송 이미지"
               className="rounded-xl border border-slate-200 w-full max-h-64 object-cover"
             />
+            <p className="mt-1 text-[10px] opacity-70">
+              실제 서비스에서는 의료정보 보호를 위해 암호화된 채널 및 접근 권한 제어 필요
+            </p>
           </div>
         )}
       </div>

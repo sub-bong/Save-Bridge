@@ -87,7 +87,10 @@ FLASK_PORT = 5001
 CORS_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
 
 # 데이터베이스 설정
-# SQLite 데이터베이스 파일 경로 (프로젝트 루트 디렉토리에 'site.db'로 저장)
-# DBeaver 연결 시 이 경로를 사용하세요
-DATABASE_URI = os.getenv("DATABASE_URI", "sqlite:///site.db")
+# SQLite 데이터베이스 파일 경로
+# - 기본값: backend/instance/site.db (이 파일 기준 상대 경로)
+# - DBeaver에서 접속할 때: 프로젝트 루트 기준으로 backend/instance/site.db 선택
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_DB_PATH = BASE_DIR / "instance" / "site.db"
+DATABASE_URI = os.getenv("DATABASE_URI", f"sqlite:///{DEFAULT_DB_PATH}")
 

@@ -37,7 +37,8 @@ def kakao_coord2region(lon: float, lat: float, kakao_key: str) -> Optional[Tuple
     headers = {"Authorization": f"KakaoAK {kakao_key}"}
     params = {"x": lon, "y": lat}
     try:
-        r = http_get(KAKAO_COORD2REGION_URL, params=params, headers=headers)
+        # 재시도 로직이 http_get에 포함되어 있음
+        r = http_get(KAKAO_COORD2REGION_URL, params=params, headers=headers, max_retries=3)
         data = r.json()
         docs = data.get("documents", [])
         target = next((d for d in docs if d.get("region_type")
@@ -47,6 +48,8 @@ def kakao_coord2region(lon: float, lat: float, kakao_key: str) -> Optional[Tuple
         return target.get("region_1depth_name"), target.get("region_2depth_name")
     except Exception as e:
         print(f"카카오 coord2region 오류: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -57,7 +60,8 @@ def kakao_coord2address(lon: float, lat: float, kakao_key: str) -> Optional[str]
     headers = {"Authorization": f"KakaoAK {kakao_key}"}
     params = {"x": lon, "y": lat}
     try:
-        r = http_get(KAKAO_COORD2ADDR_URL, params=params, headers=headers)
+        # 재시도 로직이 http_get에 포함되어 있음
+        r = http_get(KAKAO_COORD2ADDR_URL, params=params, headers=headers, max_retries=3)
         data = r.json()
         docs = data.get("documents", [])
         if not docs:
@@ -70,6 +74,8 @@ def kakao_coord2address(lon: float, lat: float, kakao_key: str) -> Optional[str]
         return None
     except Exception as e:
         print(f"카카오 coord2address 오류: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
