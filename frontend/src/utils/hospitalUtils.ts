@@ -147,7 +147,7 @@ export function detectPatientAgeGroup(sttText: string | null | undefined): "adul
 }
 
 /**
- * STT 텍스트에서 환자 나이 추출
+ * STT 텍스트에서 환자 나이 추출 (DB 저장용 - 숫자만 반환)
  * @param sttText STT로 입력받은 텍스트
  * @returns 나이 숫자 또는 undefined
  */
@@ -155,19 +155,69 @@ export function extractPatientAge(sttText: string | null | undefined): number | 
   if (!sttText) return undefined;
 
   const text = sttText;
-  // "60대", "60세", "60살" 등의 패턴 찾기
-  const agePatterns = [/(\d+)\s*(?:세|살|년생)/, /(\d+)\s*대/];
-
-  for (const pattern of agePatterns) {
-    const match = text.match(pattern);
-    if (match && match[1]) {
-      const age = parseInt(match[1]);
-      if (age > 0 && age < 150) {
-        return age;
+  
+  // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
+  const exactAgePattern = /(\d+)\s*(?:세|살|년생)/;
+  const exactMatch = text.match(exactAgePattern);
+  if (exactMatch && exactMatch[1]) {
+    const age = parseInt(exactMatch[1]);
+    if (age > 0 && age < 150) {
+      return age;
+    }
+  }
+  
+  // 연령대 추출 ("20대", "30대" 등) - 중간값으로 변환하여 DB에 저장
+  const ageBandPattern = /(\d+)\s*대/;
+  const bandMatch = text.match(ageBandPattern);
+  if (bandMatch && bandMatch[1]) {
+    const decade = parseInt(bandMatch[1]);
+    if (decade >= 0 && decade < 15) {
+      // 연령대의 중간값 반환
+      // 10대는 10-19세이므로 중간값 15세
+      // 20대는 20-29세이므로 중간값 25세
+      if (decade === 10) {
+        return 15; // 10대는 15세
+      } else if (decade === 0) {
+        return 1; // 0대(영유아)는 1세
+      } else {
+        return decade * 10 + 5; // 20대 → 25세, 30대 → 35세 등
       }
     }
   }
 
+  return undefined;
+}
+
+/**
+ * STT 텍스트에서 환자 연령대 추출 (표시용 - "20대" 형식으로 반환)
+ * @param sttText STT로 입력받은 텍스트
+ * @returns "20대", "30세" 등의 문자열 또는 undefined
+ */
+export function extractPatientAgeDisplay(sttText: string | null | undefined): string | undefined {
+  if (!sttText) return undefined;
+  
+  const text = sttText;
+  
+  // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
+  const exactAgePattern = /(\d+)\s*(?:세|살|년생)/;
+  const exactMatch = text.match(exactAgePattern);
+  if (exactMatch && exactMatch[1]) {
+    const age = parseInt(exactMatch[1]);
+    if (age > 0 && age < 150) {
+      return `${age}세`;
+    }
+  }
+  
+  // 연령대 추출 ("20대", "30대" 등) - 그대로 반환
+  const ageBandPattern = /(\d+)\s*대/;
+  const bandMatch = text.match(ageBandPattern);
+  if (bandMatch && bandMatch[1]) {
+    const decade = parseInt(bandMatch[1]);
+    if (decade >= 0 && decade < 15) {
+      return `${decade}대`;
+    }
+  }
+  
   return undefined;
 }
 
@@ -180,15 +230,25 @@ export function extractPatientSex(sttText: string | null | undefined): "M" | "F"
   if (!sttText) return undefined;
 
   const text = sttText.toLowerCase();
-
-  // 남성 키워드
-  if (text.includes("남성") || text.includes("남자") || text.includes("male") || text.includes("m/")) {
-    return "M";
+  
+  // 여성 키워드 (우선순위 높음 - "여성"이 "남성"보다 먼저 나올 수 있음)
+  const femaleKeywords = [
+    "여성", "여자", "female", "f/", "f ", "여 ", "여성인", "여자분"
+  ];
+  for (const keyword of femaleKeywords) {
+    if (text.includes(keyword)) {
+      return "F";
+    }
   }
-
-  // 여성 키워드
-  if (text.includes("여성") || text.includes("여자") || text.includes("female") || text.includes("f/")) {
-    return "F";
+  
+  // 남성 키워드
+  const maleKeywords = [
+    "남성", "남자", "male", "m/", "m ", "남 ", "남성인", "남자분"
+  ];
+  for (const keyword of maleKeywords) {
+    if (text.includes(keyword)) {
+      return "M";
+    }
   }
 
   return undefined;
@@ -203,19 +263,29 @@ export function extractPreKtasLevel(sttText: string | null | undefined): number 
   if (!sttText) return undefined;
 
   const text = sttText.toLowerCase();
-
-  // "Pre-KTAS 2점", "pre-ktas 2", "2점 분류" 등의 패턴
-  const patterns = [/pre-ktas\s*(\d+)/i, /ktas\s*(\d+)/i, /(\d+)\s*점\s*분류/];
-
+  
+  // "Pre-KTAS 1점", "Pre-KTAS 2점", "pre-ktas 2", "2점 분류" 등의 패턴
+  // 우선순위: "Pre-KTAS {숫자}점" 형식이 가장 정확함
+  const patterns = [
+    /pre-ktas\s*(\d+)\s*점/i,  // "Pre-KTAS 1점", "Pre-KTAS 2점" 형식
+    /pre-ktas\s*(\d+)/i,        // "Pre-KTAS 1", "pre-ktas 2" 형식
+    /ktas\s*(\d+)\s*점/i,       // "KTAS 1점" 형식
+    /ktas\s*(\d+)/i,            // "KTAS 1" 형식
+    /(\d+)\s*점\s*분류/,        // "1점 분류" 형식
+  ];
+  
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
       const level = parseInt(match[1]);
       if (level >= 1 && level <= 5) {
+        console.log(`✅ Pre-KTAS 레벨 추출 성공: ${level} (텍스트: "${sttText}")`);
         return level;
       }
     }
   }
-
+  
+  // Pre-KTAS 레벨 추출 실패는 정상적인 경우가 많으므로 로그 제거 (너무 많은 경고 발생)
+  // console.log(`⚠️ Pre-KTAS 레벨 추출 실패 (텍스트: "${sttText}")`);
   return undefined;
 }
