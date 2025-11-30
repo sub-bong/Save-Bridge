@@ -119,7 +119,7 @@ export const MapDisplay: React.FC<MapDisplayProps> = ({ coords, hospitals, route
 
       <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-700">
         <span className="flex items-center gap-2">
-          <span className="inline-block w-5 h-5 rounded-full bg-blue-700 text-white text-xs font-bold flex items-center justify-center shadow">P</span>
+          <span className="w-5 h-5 rounded-full bg-blue-700 text-white text-xs font-bold flex items-center justify-center shadow">P</span>
           <span>구급대원 현위치</span>
         </span>
         {hospitals.map((hospital, idx) => {
