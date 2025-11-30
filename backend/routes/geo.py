@@ -17,38 +17,65 @@ def register_geo_routes(app):
     def api_coord2address():
         """좌표 → 주소 변환 API"""
         try:
-            lat = float(request.args.get('lat', 0))
-            lon = float(request.args.get('lon', 0))
+            lat_str = request.args.get('lat')
+            lon_str = request.args.get('lon')
             
-            if not lat or not lon:
+            if lat_str is None or lon_str is None:
                 return jsonify({"error": "lat와 lon 파라미터가 필요합니다."}), 400
+            
+            try:
+                lat = float(lat_str)
+                lon = float(lon_str)
+            except (ValueError, TypeError):
+                return jsonify({"error": "lat와 lon은 숫자여야 합니다."}), 400
+            
+            if lat == 0 and lon == 0:
+                return jsonify({"error": "유효한 좌표를 입력해주세요."}), 400
             
             address = kakao_coord2address(lon, lat, KAKAO_KEY)
             if address:
                 return jsonify({"address": address}), 200
             else:
-                return jsonify({"error": "주소를 찾을 수 없습니다."}), 404
+                # 카카오 API 호출 실패 시에도 200 반환 (네트워크 문제일 수 있음)
+                # 프론트엔드에서 기본값 사용 가능하도록
+                return jsonify({"error": "주소를 찾을 수 없습니다.", "address": None}), 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            import traceback
+            traceback.print_exc()
+            # 에러 발생 시에도 200 반환하여 프론트엔드가 처리할 수 있도록
+            return jsonify({"error": str(e), "address": None}), 200
 
     @app.route('/api/geo/coord2region', methods=['GET'])
     def api_coord2region():
         """좌표 → 행정구역 변환 API"""
         try:
-            lat = float(request.args.get('lat', 0))
-            lon = float(request.args.get('lon', 0))
+            lat_str = request.args.get('lat')
+            lon_str = request.args.get('lon')
             
-            if not lat or not lon:
+            if lat_str is None or lon_str is None:
                 return jsonify({"error": "lat와 lon 파라미터가 필요합니다."}), 400
+            
+            try:
+                lat = float(lat_str)
+                lon = float(lon_str)
+            except (ValueError, TypeError):
+                return jsonify({"error": "lat와 lon은 숫자여야 합니다."}), 400
+            
+            if lat == 0 and lon == 0:
+                return jsonify({"error": "유효한 좌표를 입력해주세요."}), 400
             
             result = kakao_coord2region(lon, lat, KAKAO_KEY)
             if result:
                 sido, sigungu = result
                 return jsonify({"sido": sido, "sigungu": sigungu}), 200
             else:
-                return jsonify({"error": "행정구역을 찾을 수 없습니다."}), 404
+                # 카카오 API 호출 실패 시에도 200 반환 (네트워크 문제일 수 있음)
+                return jsonify({"error": "행정구역을 찾을 수 없습니다.", "sido": None, "sigungu": None}), 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            import traceback
+            traceback.print_exc()
+            # 에러 발생 시에도 200 반환하여 프론트엔드가 처리할 수 있도록
+            return jsonify({"error": str(e), "sido": None, "sigungu": None}), 200
 
     @app.route('/api/geo/route', methods=['GET'])
     def api_geo_route():

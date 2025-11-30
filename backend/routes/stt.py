@@ -44,7 +44,7 @@ def register_stt_routes(app, openai_client):
                 
                 # GPT-4로 의학용어 번역 및 요약
                 prompt = f"""다음은 구급대원이 음성으로 전달한 환자 상태 정보입니다. 
-의학 용어를 일반인도 이해할 수 있는 표현으로 번역하고, 핵심 정보만 간단히 요약해주세요.
+정확하게, 텍스트로 받아 쓰고, 핵심 정보만 간단히 요약해주세요.
 
 원문: {stt_text}
 
@@ -62,9 +62,11 @@ def register_stt_routes(app, openai_client):
                 
                 translated_text = completion.choices[0].message.content
                 
+                # 프론트엔드 호환성을 위해 text 필드도 포함 (기존 형식 유지)
                 return jsonify({
-                    "stt_text": stt_text,
-                    "translated_text": translated_text
+                    "text": translated_text,  # 프론트엔드가 기대하는 필드
+                    "stt_text": stt_text,  # 원문
+                    "translated_text": translated_text  # 번역된 텍스트
                 }), 200
                 
             finally:

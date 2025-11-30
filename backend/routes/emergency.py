@@ -201,17 +201,20 @@ def register_emergency_routes(app):
             # 승인된 경우 ChatSession 생성
             chat_session = None
             if response_status == '승인':
-                # 기존 세션이 있는지 확인
-                existing_session = ChatSession.query.filter_by(request_id=assignment.request_id).first()
+                # 기존 세션이 있는지 확인 (assignment_id로 찾기 - 같은 request_id에 여러 병원이 있을 수 있음)
+                existing_session = ChatSession.query.filter_by(assignment_id=assignment_id).first()
                 if existing_session:
+                    print(f"✅ 기존 ChatSession 발견: session_id={existing_session.session_id}, assignment_id={assignment_id}")
                     chat_session = existing_session
                 else:
+                    # 새 ChatSession 생성
                     chat_session = ChatSession(
                         request_id=assignment.request_id,
                         assignment_id=assignment_id,
                         started_at=datetime.now()
                     )
                     db.session.add(chat_session)
+                    print(f"✅ 새 ChatSession 생성: request_id={assignment.request_id}, assignment_id={assignment_id}")
             
             db.session.commit()
             
