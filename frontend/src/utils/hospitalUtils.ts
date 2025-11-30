@@ -4,25 +4,19 @@ import { SYMPTOM_RULES, facilityNames, bedNames } from "../constants";
 export const getRequiredFacilities = (symptomName: string): string[] => {
   const rule = SYMPTOM_RULES[symptomName];
   if (!rule) return [];
-  return rule.bool_any
-    .map(([key]) => facilityNames[key])
-    .filter((name): name is string => !!name);
+  return rule.bool_any.map(([key]) => facilityNames[key]).filter((name): name is string => !!name);
 };
 
 export const getRequiredBeds = (symptomName: string): string[] => {
   const rule = SYMPTOM_RULES[symptomName];
   if (!rule) return [];
-  return rule.min_ge1
-    .map(([key]) => bedNames[key])
-    .filter((name): name is string => !!name);
+  return rule.min_ge1.map(([key]) => bedNames[key]).filter((name): name is string => !!name);
 };
 
 export const getNiceToHaveBeds = (symptomName: string): string[] => {
   const rule = SYMPTOM_RULES[symptomName];
   if (!rule) return [];
-  return rule.nice_to_have
-    .map(([key]) => bedNames[key])
-    .filter((name): name is string => !!name);
+  return rule.nice_to_have.map(([key]) => bedNames[key]).filter((name): name is string => !!name);
 };
 
 export const formatBedValue = (value: string | number | undefined): string => {
@@ -54,45 +48,70 @@ export const formatHvidate = (value?: string): string => {
  */
 export function detectPatientAgeGroup(sttText: string | null | undefined): "adult" | "pediatric" | null {
   if (!sttText) return null;
-  
+
   const text = sttText.toLowerCase();
-  
+
   // 소아 관련 키워드 (우선순위 높음)
   const pediatricKeywords = [
-    "생후", "신생아", "영아", "유아", "소아", "아동", "어린이",
-    "신생아실", "소아과", "소아청소년", "소아중환자",
-    "미숙아", "조산아", "신생아중환자",
-    "인큐베이터", "소아용", "소아기"
+    "생후",
+    "신생아",
+    "영아",
+    "유아",
+    "소아",
+    "아동",
+    "어린이",
+    "신생아실",
+    "소아과",
+    "소아청소년",
+    "소아중환자",
+    "미숙아",
+    "조산아",
+    "신생아중환자",
+    "인큐베이터",
+    "소아용",
+    "소아기",
   ];
-  
+
   // 성인 관련 키워드
   const adultKeywords = [
-    "성인", "성인 남성", "성인 여성", "남성", "여성",
-    "10대", "20대", "30대", "40대", "50대", "60대", "70대", "80대", "90대",
-    "청년", "중년", "장년", "노인", "고령"
+    "성인",
+    "성인 남성",
+    "성인 여성",
+    "남성",
+    "여성",
+    "10대",
+    "20대",
+    "30대",
+    "40대",
+    "50대",
+    "60대",
+    "70대",
+    "80대",
+    "90대",
+    "청년",
+    "중년",
+    "장년",
+    "노인",
+    "고령",
   ];
-  
+
   // 소아 키워드 확인
   for (const keyword of pediatricKeywords) {
     if (text.includes(keyword)) {
       return "pediatric";
     }
   }
-  
+
   // 성인 키워드 확인
   for (const keyword of adultKeywords) {
     if (text.includes(keyword)) {
       return "adult";
     }
   }
-  
+
   // 숫자 + "세", "살", "개월" 패턴 확인
-  const agePatterns = [
-    /(\d+)\s*(?:세|살|년생)/g,
-    /생후\s*(\d+)\s*(?:주|개월|일)/g,
-    /(\d+)\s*(?:개월|주|일)\s*(?:된|된\s*영유아|된\s*아기)/g
-  ];
-  
+  const agePatterns = [/(\d+)\s*(?:세|살|년생)/g, /생후\s*(\d+)\s*(?:주|개월|일)/g, /(\d+)\s*(?:개월|주|일)\s*(?:된|된\s*영유아|된\s*아기)/g];
+
   for (const pattern of agePatterns) {
     const matches = text.match(pattern);
     if (matches) {
@@ -123,7 +142,7 @@ export function detectPatientAgeGroup(sttText: string | null | undefined): "adul
       }
     }
   }
-  
+
   return null;
 }
 
@@ -134,7 +153,7 @@ export function detectPatientAgeGroup(sttText: string | null | undefined): "adul
  */
 export function extractPatientAge(sttText: string | null | undefined): number | undefined {
   if (!sttText) return undefined;
-  
+
   const text = sttText;
   
   // 먼저 정확한 나이 추출 ("60세", "60살", "60년생")
@@ -165,7 +184,7 @@ export function extractPatientAge(sttText: string | null | undefined): number | 
       }
     }
   }
-  
+
   return undefined;
 }
 
@@ -209,7 +228,7 @@ export function extractPatientAgeDisplay(sttText: string | null | undefined): st
  */
 export function extractPatientSex(sttText: string | null | undefined): "M" | "F" | undefined {
   if (!sttText) return undefined;
-  
+
   const text = sttText.toLowerCase();
   
   // 여성 키워드 (우선순위 높음 - "여성"이 "남성"보다 먼저 나올 수 있음)
@@ -231,7 +250,7 @@ export function extractPatientSex(sttText: string | null | undefined): "M" | "F"
       return "M";
     }
   }
-  
+
   return undefined;
 }
 
@@ -242,7 +261,7 @@ export function extractPatientSex(sttText: string | null | undefined): "M" | "F"
  */
 export function extractPreKtasLevel(sttText: string | null | undefined): number | undefined {
   if (!sttText) return undefined;
-  
+
   const text = sttText.toLowerCase();
   
   // "Pre-KTAS 1점", "Pre-KTAS 2점", "pre-ktas 2", "2점 분류" 등의 패턴
@@ -266,7 +285,7 @@ export function extractPreKtasLevel(sttText: string | null | undefined): number 
     }
   }
   
-  console.log(`⚠️ Pre-KTAS 레벨 추출 실패 (텍스트: "${sttText}")`);
+  // Pre-KTAS 레벨 추출 실패는 정상적인 경우가 많으므로 로그 제거 (너무 많은 경고 발생)
+  // console.log(`⚠️ Pre-KTAS 레벨 추출 실패 (텍스트: "${sttText}")`);
   return undefined;
 }
-
