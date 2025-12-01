@@ -5,7 +5,8 @@ from .models import (
     EmergencyRequest,
     RequestAssignment,
     ChatSession,
-    ChatMessage
+    ChatMessage,
+    APICallLog
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     'EmergencyRequest',
     'RequestAssignment',
     'ChatSession',
-    'ChatMessage'
+    'ChatMessage',
+    'APICallLog'
 ]

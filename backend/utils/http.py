@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from typing import Optional, Dict, Any
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from datetime import date
 
 from config import DATA_GO_KR_KEY
 
@@ -18,11 +19,11 @@ def get_session():
     global _session
     if _session is None:
         _session = requests.Session()
-        # 재시도 전략 설정
+        # 재시도 전략 설정 (429 에러는 재시도하지 않음 - API 제한 때문)
         retry_strategy = Retry(
             total=3,
             backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
+            status_forcelist=[500, 502, 503, 504],  # 429 제외
             allowed_methods=["GET"]
         )
         adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
@@ -69,13 +70,37 @@ def http_get(url: str, params: Dict[str, Any], headers: Optional[Dict[str, str]]
     except Exception as dns_check_error:
         print(f"DNS 사전 해석 중 오류 (무시하고 계속): {dns_check_error}")
     
-    # 재시도 로직 (추가 수동 재시도)
+    # 재시도 로직 (추가 수동 재시도, 단 429 에러는 재시도하지 않음)
     last_error = None
     for attempt in range(max_retries):
         try:
             resp = session.get(url, params=params, headers=headers, timeout=timeout)
+            # API 호출 로그 기록 (apis.data.go.kr만)
+            if "apis.data.go.kr" in netloc:
+                _log_api_call(url, resp.status_code, True)
+            # 429 에러는 즉시 반환 (재시도하지 않음)
+            if resp.status_code == 429:
+                print(f"⚠️  API 호출 제한 도달 (429): {url}")
+                resp.raise_for_status()  # 429 에러를 발생시킴
             resp.raise_for_status()
             return resp
+        except requests.exceptions.HTTPError as e:
+            # API 호출 로그 기록 (실패한 경우)
+            if "apis.data.go.kr" in netloc and hasattr(e, 'response') and e.response:
+                _log_api_call(url, e.response.status_code, False)
+            # 429 에러는 재시도하지 않고 즉시 반환
+            if hasattr(e.response, 'status_code') and e.response.status_code == 429:
+                print(f"⚠️  API 호출 제한 도달 (429), 재시도하지 않음: {url}")
+                raise
+            last_error = e
+            if attempt < max_retries - 1:
+                import time
+                wait_time = (attempt + 1) * 2  # 2초, 4초, 6초 대기
+                print(f"HTTP 요청 실패 (시도 {attempt + 1}/{max_retries}), {wait_time}초 후 재시도: {e}")
+                time.sleep(wait_time)
+            else:
+                print(f"HTTP 요청 최종 실패 (시도 {max_retries}/{max_retries}): {e}")
+                raise
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -86,6 +111,40 @@ def http_get(url: str, params: Dict[str, Any], headers: Optional[Dict[str, str]]
             else:
                 print(f"HTTP 요청 최종 실패 (시도 {max_retries}/{max_retries}): {e}")
                 raise
+
+
+def _log_api_call(url: str, status_code: int, is_success: bool):
+    """API 호출 로그 기록 (apis.data.go.kr만)"""
+    try:
+        from flask import has_app_context, current_app
+        if has_app_context():
+            from models import APICallLog, db
+            from urllib.parse import urlparse
+            
+            # API 엔드포인트 추출
+            parsed = urlparse(url)
+            endpoint = None
+            if "/getEgytBassInfoInqire" in url:
+                endpoint = "getEgytBassInfoInqire"
+            elif "/getEgytListInfoInqire" in url:
+                endpoint = "getEgytListInfoInqire"
+            elif "/getStrmListInfoInqire" in url:
+                endpoint = "getStrmListInfoInqire"
+            elif "/getEmrrmRltmUsefulSckbdInfoInqire" in url:
+                endpoint = "getEmrrmRltmUsefulSckbdInfoInqire"
+            
+            log = APICallLog(
+                api_url=url[:500],  # URL 길이 제한
+                api_endpoint=endpoint,
+                status_code=status_code,
+                is_success=is_success,
+                call_date=date.today()
+            )
+            db.session.add(log)
+            db.session.commit()
+    except Exception as e:
+        # 로그 기록 실패해도 API 호출은 계속 진행
+        pass
 
 
 def safe_int(x) -> int:

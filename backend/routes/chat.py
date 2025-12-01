@@ -366,7 +366,7 @@ def register_chat_routes(app, socketio=None):
         if request.method == 'OPTIONS':
             # withCredentials를 사용하는 요청에서는 명시적인 origin을 반환해야 함
             origin = request.headers.get('Origin')
-            allowed_origins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+            allowed_origins = ['http://localhost:5173', 'http://localhost:3000']
             
             response = jsonify({})
             if origin in allowed_origins:
@@ -383,7 +383,7 @@ def register_chat_routes(app, socketio=None):
             if not session:
                 # CORS 헤더 추가 (404 응답에도 필요)
                 origin = request.headers.get('Origin')
-                allowed_origins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+                allowed_origins = ['http://localhost:5173', 'http://localhost:3000']
                 
                 response = jsonify({"error": "채팅 세션을 찾을 수 없습니다."})
                 if origin in allowed_origins:
@@ -419,7 +419,7 @@ def register_chat_routes(app, socketio=None):
             
             # CORS 헤더 추가 (withCredentials를 사용하는 요청을 위해)
             origin = request.headers.get('Origin')
-            allowed_origins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+            allowed_origins = ['http://localhost:5173', 'http://localhost:3000']
             
             response = jsonify({
                 "message": "채팅 세션이 삭제되었습니다.",
@@ -442,7 +442,7 @@ def register_chat_routes(app, socketio=None):
             
             # CORS 헤더 추가 (에러 응답에도 필요)
             origin = request.headers.get('Origin')
-            allowed_origins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+            allowed_origins = ['http://localhost:5173', 'http://localhost:3000']
             
             response = jsonify({"error": f"채팅 세션 삭제 중 오류가 발생했습니다: {str(e)}"})
             if origin in allowed_origins:

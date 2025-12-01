@@ -315,7 +315,98 @@ export function extractPreKtasLevel(sttText: string | null | undefined): number 
     }
   }
   
+  // "2점", "3점" 같은 단순 형식도 추출 (Pre-KTAS 없이 점수만 있는 경우)
+  const simplePointPattern = /(\d+)\s*점/;
+  const simpleMatch = text.match(simplePointPattern);
+  if (simpleMatch && simpleMatch[1]) {
+    const level = parseInt(simpleMatch[1]);
+    if (level >= 1 && level <= 5) {
+      console.log(`✅ Pre-KTAS 레벨 추출 성공 (단순 형식): ${level} (텍스트: "${sttText}")`);
+      return level;
+    }
+  }
+  
   // Pre-KTAS 레벨 추출 실패는 정상적인 경우가 많으므로 로그 제거 (너무 많은 경고 발생)
   // console.log(`⚠️ Pre-KTAS 레벨 추출 실패 (텍스트: "${sttText}")`);
   return undefined;
+}
+
+/**
+ * 한 줄 텍스트에서 환자 정보를 통합 파싱 (중증탭 입력용)
+ * 예: "30대 심근경색 의심(STEMI), 2점" → { age: 35, sex: undefined, preKtas: 2, symptom: "심근경색 의심(STEMI)" }
+ * @param text 입력 텍스트
+ * @returns 파싱된 환자 정보
+ */
+export function parsePatientInfoFromText(text: string | null | undefined): {
+  age?: number;
+  sex?: "M" | "F";
+  preKtas?: number;
+  symptom?: string;
+} {
+  if (!text || typeof text !== 'string') {
+    return {};
+  }
+
+  const result: {
+    age?: number;
+    sex?: "M" | "F";
+    preKtas?: number;
+    symptom?: string;
+  } = {};
+
+  // 나이 추출
+  const age = extractPatientAge(text);
+  if (age) {
+    result.age = age;
+  }
+
+  // 성별 추출
+  const sex = extractPatientSex(text);
+  if (sex) {
+    result.sex = sex;
+  }
+
+  // Pre-KTAS 점수 추출 (개선된 버전)
+  const preKtas = extractPreKtasLevel(text);
+  if (preKtas) {
+    result.preKtas = preKtas;
+  }
+
+  // 증상 추출 (심근경색, 뇌졸중, 외상 등)
+  const symptomPatterns = [
+    { pattern: /심근경색\s*의심\s*\(?\s*STEMI\s*\)?/i, symptom: "심근경색 의심(STEMI)" },
+    { pattern: /심근경색\s*의심/i, symptom: "심근경색 의심(STEMI)" },
+    { pattern: /STEMI/i, symptom: "심근경색 의심(STEMI)" },
+    { pattern: /뇌졸중\s*의심/i, symptom: "뇌졸중 의심(FAST+)" },
+    { pattern: /FAST\s*[+양]성/i, symptom: "뇌졸중 의심(FAST+)" },
+    { pattern: /다발성\s*외상/i, symptom: "다발성 외상/중증 외상" },
+    { pattern: /중증\s*외상/i, symptom: "다발성 외상/중증 외상" },
+    { pattern: /외상\s*중증/i, symptom: "다발성 외상/중증 외상" },
+    { pattern: /소아\s*중증/i, symptom: "소아 중증(신생아/영아)" },
+    { pattern: /신생아|영아/i, symptom: "소아 중증(신생아/영아)" },
+  ];
+
+  for (const { pattern, symptom } of symptomPatterns) {
+    if (pattern.test(text)) {
+      result.symptom = symptom;
+      break;
+    }
+  }
+
+  // 증상이 없으면 텍스트에서 주요 키워드 추출
+  if (!result.symptom) {
+    const cleanedText = text
+      .replace(/\d+\s*대/g, '') // 나이 제거
+      .replace(/\d+\s*점/g, '') // 점수 제거
+      .replace(/남성|여성|남자|여자/g, '') // 성별 제거
+      .replace(/프리케이타스|Pre-KTAS|KTAS/gi, '') // Pre-KTAS 제거
+      .replace(/[,，]/g, ' ') // 쉼표를 공백으로
+      .trim();
+
+    if (cleanedText.length > 0 && cleanedText.length < 50) {
+      result.symptom = cleanedText;
+    }
+  }
+
+  return result;
 }

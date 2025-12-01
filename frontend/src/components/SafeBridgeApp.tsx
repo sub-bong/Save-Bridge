@@ -17,8 +17,9 @@ import {
   callHospital,
   updateResponseStatus,
   getPendingChatSessionForEms,
+  convertTextToSBAR,
 } from "../services/api";
-import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel } from "../utils/hospitalUtils";
+import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel, parsePatientInfoFromText } from "../utils/hospitalUtils";
 import { LocationInput } from "./LocationInput";
 import { PatientStatusInput, CRITICAL_PRESETS } from "./PatientStatusInput";
 import { HospitalSearchButtons } from "./SymptomSelector";
@@ -150,6 +151,57 @@ export const SafeBridgeApp: React.FC = () => {
     loadUser();
   }, []);
 
+  // 중증탭에서 선택한 정보를 STT 텍스트로 자동 생성하고 SBAR로 변환
+  useEffect(() => {
+    if (inputMode !== "critical") return;
+    
+    // 중증탭에서 선택한 정보로 STT 텍스트 생성
+    const parts: string[] = [];
+    
+    // Pre-KTAS 점수 (증상에서 추출)
+    let preKtasLevel: number | undefined;
+    const presetMatch = CRITICAL_PRESETS.find(p => p.label === symptom)?.preKtasLevel?.match(/\d+/);
+    if (presetMatch) {
+      preKtasLevel = parseInt(presetMatch[0]);
+    }
+    if (preKtasLevel) {
+      parts.push(`프리케이타스 ${preKtasLevel}점`);
+    }
+    
+    // 나이대
+    if (patientAgeBand) {
+      parts.push(patientAgeBand);
+    }
+    
+    // 성별
+    if (patientSex === "male") {
+      parts.push("남성");
+    } else if (patientSex === "female") {
+      parts.push("여성");
+    }
+    
+    // 증상
+    if (symptom) {
+      parts.push(symptom);
+    }
+    
+    if (parts.length > 0) {
+      const generatedSttText = parts.join(" ");
+      setSttText(generatedSttText);
+      
+      // SBAR로 변환
+      convertTextToSBAR(generatedSttText)
+        .then((result) => {
+          if (result.sbarSummary) {
+            setSbarText(result.sbarSummary);
+          }
+        })
+        .catch((error) => {
+          console.error("SBAR 변환 실패:", error);
+          // 실패해도 계속 진행
+        });
+    }
+  }, [inputMode, patientSex, patientAgeBand, symptom]);
 
   // 로그아웃 모달 열기
   const handleLogoutClick = () => {
@@ -510,6 +562,21 @@ export const SafeBridgeApp: React.FC = () => {
       setActiveCalls({});
       colorMapRef.current = {};
       
+      // 중증탭 모드이고 SBAR 변환이 완료되지 않았으면 변환 완료까지 대기
+      if (inputMode === "critical" && sttText && !sbarText) {
+        try {
+          console.log("⏳ SBAR 변환 대기 중...");
+          const sbarResult = await convertTextToSBAR(sttText);
+          if (sbarResult.sbarSummary) {
+            setSbarText(sbarResult.sbarSummary);
+            console.log("✅ SBAR 변환 완료");
+          }
+        } catch (error) {
+          console.error("SBAR 변환 실패 (병원 찾기 시작 시점):", error);
+          // 실패해도 계속 진행 (STT 텍스트 사용)
+        }
+      }
+
       // 증상에 따라 자동으로 병원 타입 결정
       // 다발성 외상/중증 외상 → 외상센터 우선, 그 외 → 일반 (백엔드에서 자동 처리)
       const result = await searchHospitals(coords.lat, coords.lon, region.sido, region.sigungu, symptom, sttText || null);
@@ -555,10 +622,24 @@ export const SafeBridgeApp: React.FC = () => {
       // EmergencyRequest 생성 (DB에 저장)
       if (currentUser && uniqueHospitals.length > 0) {
         try {
-          // STT 텍스트에서 환자 정보 추출 (우선순위)
-          const patientAgeFromStt = extractPatientAge(sttText);
-          const patientSexFromStt = extractPatientSex(sttText);
-          const preKtasLevel = extractPreKtasLevel(sttText);
+          // STT 텍스트에서 환자 정보 통합 파싱 (개선된 버전)
+          const parsedInfo = parsePatientInfoFromText(sttText);
+          
+          // 통합 파싱 결과 우선 사용, 실패 시 개별 함수로 재시도
+          let patientAgeFromStt = parsedInfo.age;
+          let patientSexFromStt = parsedInfo.sex;
+          let preKtasLevel = parsedInfo.preKtas;
+          
+          // 통합 파싱에서 실패한 항목만 개별 함수로 재시도
+          if (!patientAgeFromStt) {
+            patientAgeFromStt = extractPatientAge(sttText);
+          }
+          if (!patientSexFromStt) {
+            patientSexFromStt = extractPatientSex(sttText);
+          }
+          if (!preKtasLevel) {
+            preKtasLevel = extractPreKtasLevel(sttText);
+          }
           
           // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
           const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
@@ -879,10 +960,24 @@ export const SafeBridgeApp: React.FC = () => {
       if (!requestId && currentUser) {
         console.log("EmergencyRequest가 없어서 먼저 생성합니다...");
         try {
-          // STT 텍스트에서 환자 정보 추출 (우선순위)
-          const patientAgeFromStt = extractPatientAge(sttText);
-          const patientSexFromStt = extractPatientSex(sttText);
-          const preKtasLevel = extractPreKtasLevel(sttText);
+          // STT 텍스트에서 환자 정보 통합 파싱 (개선된 버전)
+          const parsedInfo = parsePatientInfoFromText(sttText);
+          
+          // 통합 파싱 결과 우선 사용, 실패 시 개별 함수로 재시도
+          let patientAgeFromStt = parsedInfo.age;
+          let patientSexFromStt = parsedInfo.sex;
+          let preKtasLevel = parsedInfo.preKtas;
+          
+          // 통합 파싱에서 실패한 항목만 개별 함수로 재시도
+          if (!patientAgeFromStt) {
+            patientAgeFromStt = extractPatientAge(sttText);
+          }
+          if (!patientSexFromStt) {
+            patientSexFromStt = extractPatientSex(sttText);
+          }
+          if (!preKtasLevel) {
+            preKtasLevel = extractPreKtasLevel(sttText);
+          }
           
           // STT에서 추출 실패 시 사용자 선택값 사용, 그래도 없으면 기본값
           const patientAge = patientAgeFromStt || extractPatientAge(patientAgeBand) || 30;
@@ -1110,25 +1205,111 @@ export const SafeBridgeApp: React.FC = () => {
     };
   }, [hospitals]);
 
-  const FALLBACK_TWILIO_NUMBER = "010-4932-3766";
-  // ARS용 환자 정보: 사용자가 선택한 STT 원문 또는 SBAR 텍스트만 사용
+  const FALLBACK_TWILIO_NUMBER = "010-4787-1547";
+  // ARS용 환자 정보: 사용자가 선택한 STT 원문 또는 SBAR 텍스트를 우선 사용
+  // - STT/SBAR가 없으면 중증 탭에서 선택한 정보(Pre-KTAS, 성별, 나이대, 증상)를 기반으로 ARS 메시지 생성
   // - Pre-KTAS 표기는 음성에서 자연스럽게 읽히도록 "프리케이타스"로 변환
+  // - "프리케이타스"와 "Pre-KTAS" 중복 제거, "프리케이타스 X점" 형태로만 표시
   const buildPatientInfo = () => {
-    const normalizePreKtas = (text: string) =>
-      text.replace(/Pre[-\s]?KTAS/gi, "프리케이타스");
+    const normalizePreKtas = (text: string) => {
+      // "프리케이타스"로 시작하는 부분을 찾아서 숫자만 추출하고 "프리케이타스 X점" 형태로 교체
+      // 예: "프리케이타스 Pre-KTAS 1단계·긴급점" → "프리케이타스 1점"
+      const preKtasMatch = text.match(/프리케이타스[^\d]*(\d+)/);
+      if (preKtasMatch) {
+        const level = preKtasMatch[1];
+        // "프리케이타스"로 시작해서 쉼표, 공백, 또는 문장 끝까지의 모든 텍스트를 "프리케이타스 X점"으로 교체
+        // 더 포괄적인 패턴: "프리케이타스" 뒤에 오는 모든 문자(공백 포함)를 매칭하되, 쉼표나 문장 끝에서 멈춤
+        text = text.replace(/프리케이타스[^,]*?(\d+)[^,]*/g, `프리케이타스 ${level}점`);
+      }
+      
+      // 모든 Pre-KTAS 변형을 제거 (혹시 남아있을 수 있는 영문 표기 완전 제거)
+      text = text.replace(/Pre[-\s]?KTAS/gi, "");
+      // "프리케이타스 프리케이타스" 같은 중복 제거
+      text = text.replace(/프리케이타스\s+프리케이타스/g, "프리케이타스");
+      // 연속된 공백 정리
+      text = text.replace(/\s+/g, " ").trim();
+      return text;
+    };
 
     const stt = sttText?.trim() || "";
     const sbar = sbarText?.trim() || "";
 
+    // 중증탭 모드: SBAR가 있으면 SBAR 앞에 프리케이타스 붙여서 사용, 없으면 STT 사용
+    if (inputMode === "critical") {
+      if (sbar) {
+        // Pre-KTAS 점수 추출
+        let preKtasLevel: number | undefined = extractPreKtasLevel(sttText);
+        if (!preKtasLevel) {
+          const presetMatch = CRITICAL_PRESETS.find(p => p.label === symptom)?.preKtasLevel?.match(/\d+/);
+          if (presetMatch) {
+            preKtasLevel = parseInt(presetMatch[0]);
+          }
+        }
+        
+        // SBAR 앞에 프리케이타스 붙이기
+        const normalizedSbar = normalizePreKtas(sbar);
+        if (preKtasLevel) {
+          // SBAR에 이미 프리케이타스가 포함되어 있지 않으면 앞에 붙이기
+          if (!normalizedSbar.includes("프리케이타스")) {
+            return `프리케이타스 ${preKtasLevel}점 ${normalizedSbar}`;
+          }
+        }
+        return normalizedSbar;
+      } else if (stt) {
+        // SBAR 변환이 완료되지 않았으면 STT 텍스트 사용
+        return normalizePreKtas(stt);
+      }
+    }
+
+    // STT/SBAR 텍스트가 있으면 우선 사용
     if (arsSource === "sbar" && sbar) {
       return normalizePreKtas(sbar);
     }
     if (arsSource === "stt" && stt) {
       return normalizePreKtas(stt);
     }
-    // 소스가 지정되지 않았거나 비어 있으면, STT 원문이 있으면 사용
-    if (stt) return normalizePreKtas(stt);
-    // 둘 다 없으면 빈 문자열 반환 (백엔드에서 기본 멘트 처리)
+    if (stt) {
+      return normalizePreKtas(stt);
+    }
+
+    // STT/SBAR 텍스트가 없으면 중증 탭에서 선택한 정보를 기반으로 ARS 메시지 생성
+    // 형식: "현재 {프리케이타스 1~5단계} {나이대} {성별} {중증 종류}"
+    const parts: string[] = ["현재"];
+    
+    // 1. Pre-KTAS 점수
+    let preKtasLevel: number | undefined = extractPreKtasLevel(sttText);
+    if (!preKtasLevel) {
+      const presetMatch = CRITICAL_PRESETS.find(p => p.label === symptom)?.preKtasLevel?.match(/\d+/);
+      if (presetMatch) {
+        preKtasLevel = parseInt(presetMatch[0]);
+      }
+    }
+    if (preKtasLevel) {
+      parts.push(`프리케이타스 ${preKtasLevel}점`);
+    }
+    
+    // 2. 나이대
+    if (patientAgeBand) {
+      parts.push(patientAgeBand);
+    }
+    
+    // 3. 성별
+    if (patientSex === "male") {
+      parts.push("남성");
+    } else if (patientSex === "female") {
+      parts.push("여성");
+    }
+    
+    // 4. 중증 종류 (증상)
+    if (symptom) {
+      parts.push(symptom);
+    }
+    
+    if (parts.length > 1) { // "현재" 외에 다른 정보가 있으면
+      return parts.join(" ");
+    }
+    
+    // 모든 정보가 없으면 빈 문자열 반환 (백엔드에서 기본 멘트 처리)
     return "";
   };
 
@@ -1523,7 +1704,7 @@ export const SafeBridgeApp: React.FC = () => {
             <div className="flex-1 text-center md:text-left">
               <p className="text-xs uppercase tracking-[0.2em] text-emerald-500 font-semibold mb-1">Emergency Dispatch</p>
               <h3 className="text-lg md:text-xl font-bold text-slate-900">응급환자 수용 가능 병원 탐색</h3>
-              <p className="text-sm md:text-base text-slate-600 mt-1">버튼을 누르면 병원 조회와 동시에 Twilio ARS(010-4932-3766) 자동 통화가 연속으로 진행됩니다.</p>
+              <p className="text-sm md:text-base text-slate-600 mt-1">버튼을 누르면 병원 조회와 동시에 Twilio ARS(010-4787-1547) 자동 통화가 연속으로 진행됩니다.</p>
             </div>
             <button
               className="w-full md:w-auto inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-green-600 text-white px-6 md:px-10 py-5 text-base md:text-xl font-bold shadow-xl hover:from-emerald-600 hover:to-green-700 active:scale-[0.99] transition disabled:opacity-40 disabled:cursor-not-allowed"

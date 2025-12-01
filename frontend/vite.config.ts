@@ -1,7 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
+// @ts-ignore - Node.js 모듈은 vite.config.ts에서 사용 가능
 import fs from 'fs'
+// @ts-ignore
 import path from 'path'
+// @ts-ignore
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -11,6 +14,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    strictPort: true,  // 포트가 사용 중이면 에러 발생 (다른 포트로 자동 변경 방지)
     host: '0.0.0.0',  // ✅ 이 줄 추가 (모든 네트워크 인터페이스에서 접속 허용)
     // HTTPS 설정 (mkcert로 생성한 인증서 사용)
     https: {
@@ -19,6 +23,7 @@ export default defineConfig({
     },
     // ngrok 도메인 및 .local 도메인 허용 (모바일 카메라 접근을 위한 HTTP 우회)
     allowedHosts: [
+      
       '.ngrok-free.app',
       '.ngrok.io',
       'localhost',

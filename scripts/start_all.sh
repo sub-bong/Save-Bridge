@@ -18,6 +18,7 @@ mkdir -p logs
 echo " 기존 프로세스 정리 중..."
 pkill -f "backend/app.py" 2>/dev/null
 pkill -f "app.py" 2>/dev/null
+pkill -9 ngrok 2>/dev/null  # ngrok 프로세스 강제 종료
 pkill -f "ngrok.*5001" 2>/dev/null
 pkill -f "vite.*5173" 2>/dev/null
 pkill -f "node.*vite" 2>/dev/null
@@ -142,10 +143,28 @@ if [ -n "$NGROK_PATH" ]; then
     
     sleep 5
     echo " ngrok URL 확인 중..."
-    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null | python3 -c "import sys, json; data = json.load(sys.stdin); print(data['tunnels'][0]['public_url'] if data.get('tunnels') else '')" 2>/dev/null)
+    
+    # ngrok URL 확인 (최대 3번 재시도, 각 시도마다 3초 타임아웃)
+    # 포트 4040이 사용 중이면 4041로 시도
+    NGROK_URL=""
+    for i in 1 2 3; do
+        # 먼저 4040 포트로 시도
+        NGROK_URL=$(curl -s --max-time 3 http://localhost:4040/api/tunnels 2>/dev/null | python3 -c "import sys, json; data = json.load(sys.stdin); print(data['tunnels'][0]['public_url'] if data.get('tunnels') else '')" 2>/dev/null)
+        # 4040에서 실패하면 4041 포트로 시도
+        if [ -z "$NGROK_URL" ]; then
+            NGROK_URL=$(curl -s --max-time 3 http://localhost:4041/api/tunnels 2>/dev/null | python3 -c "import sys, json; data = json.load(sys.stdin); print(data['tunnels'][0]['public_url'] if data.get('tunnels') else '')" 2>/dev/null)
+        fi
+        if [ -n "$NGROK_URL" ]; then
+            break
+        fi
+        if [ $i -lt 3 ]; then
+            echo "    재시도 중... ($i/3)"
+            sleep 2
+        fi
+    done
     
     if [ -z "$NGROK_URL" ]; then
-        echo "     ngrok URL을 가져올 수 없습니다"
+        echo "     ngrok URL을 가져올 수 없습니다 (타임아웃)"
         echo "    수동으로 확인: http://localhost:4040"
         NGROK_URL="(확인 필요)"
     else
@@ -267,15 +286,18 @@ echo "    모바일 접속 URL: http://$MAC_HOSTNAME_LOCAL:5173"
 # React 앱 준비 대기
 sleep 5
 
-# React 앱 확인 (HTTPS 우선, 없으면 HTTP)
+# React 앱 확인 (HTTPS 우선, 없으면 HTTP, 타임아웃 추가)
 REACT_PORT="5173"
 REACT_PROTOCOL="http"
-if curl -s -k https://localhost:5173 > /dev/null 2>&1; then
+# HTTPS 확인 (타임아웃 3초)
+if curl -s --max-time 3 -k https://localhost:5173 > /dev/null 2>&1; then
     REACT_PROTOCOL="https"
+    REACT_PORT="5173"
     echo "    React 앱 정상 실행 중 (HTTPS)"
     echo "    React URL: https://localhost:$REACT_PORT"
-elif curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
-    REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
+elif curl -s --max-time 3 http://localhost:5173 > /dev/null 2>&1; then
+    REACT_PROTOCOL="http"
+    REACT_PORT="5173"
     echo "    React 앱 정상 실행 중 (HTTP)"
     echo "    React URL: http://localhost:$REACT_PORT"
 else
@@ -302,15 +324,15 @@ echo "   - /api/geo/coord2region"
 echo "   - /api/geo/address2coord"
 echo ""
 echo " React 앱 (프론트엔드):"
+LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "10.50.1.62")
+MAC_HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "MacBook-Pro.local")
 if [ "$REACT_PROTOCOL" = "https" ]; then
-    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "10.50.1.62")
-    MAC_HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "MacBook-Pro.local")
     echo "   https://localhost:$REACT_PORT (로컬)"
     echo "   https://$LOCAL_IP:$REACT_PORT (네트워크 IP)"
     echo "   http://$MAC_HOSTNAME_LOCAL:$REACT_PORT (모바일 카메라 접근용 .local 도메인)"
 else
-    MAC_HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "MacBook-Pro.local")
-    echo "   http://localhost:$REACT_PORT"
+    echo "   http://localhost:$REACT_PORT (로컬)"
+    echo "   http://$LOCAL_IP:$REACT_PORT (네트워크 IP)"
     echo "   http://$MAC_HOSTNAME_LOCAL:$REACT_PORT (모바일 카메라 접근용 .local 도메인)"
 fi
 echo ""

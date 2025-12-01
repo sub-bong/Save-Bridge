@@ -164,8 +164,8 @@ echo "    React PID: $REACT_PID"
 sleep 5
 
 # React 앱 확인
-if curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
-    REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
+if curl -s http://localhost:5173 > /dev/null 2>&1; then
+    REACT_PORT="5173"
     echo "    React 앱 정상 실행 중"
     echo "    React URL: http://localhost:$REACT_PORT?mode=er"
 else

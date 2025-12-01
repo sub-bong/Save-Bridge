@@ -14,6 +14,7 @@ sys.path.insert(0, str(backend_dir))
 
 from app import app, db
 from sqlalchemy import text, inspect
+from models import APICallLog
 
 
 def check_column_exists(table_name: str, column_name: str) -> bool:
@@ -77,6 +78,27 @@ def add_chat_session_is_deleted_column():
         return False
 
 
+def create_api_call_log_table():
+    """APICallLog 테이블 생성"""
+    table_name = "api_call_log"
+    
+    try:
+        # 테이블이 이미 존재하는지 확인
+        inspector = inspect(db.engine)
+        if table_name in inspector.get_table_names():
+            print(f"✅ {table_name} 테이블이 이미 존재합니다.")
+            return True
+        
+        # 테이블 생성
+        print(f"📝 {table_name} 테이블 생성 중...")
+        db.create_all()  # 모든 모델의 테이블 생성
+        print(f"✅ {table_name} 테이블 생성 완료")
+        return True
+    except Exception as e:
+        print(f"❌ {table_name} 테이블 생성 실패: {e}")
+        return False
+
+
 def migrate_all():
     """모든 마이그레이션 실행"""
     print("=" * 60)
@@ -87,6 +109,7 @@ def migrate_all():
         migrations = [
             ("Hospital.password 컬럼 추가", add_hospital_password_column),
             ("ChatSession.is_deleted 컬럼 추가", add_chat_session_is_deleted_column),
+            ("APICallLog 테이블 생성", create_api_call_log_table),
         ]
         
         success_count = 0

@@ -79,10 +79,10 @@ def fetch_hospital_grade_info(hpids: List[str], service_key: str, target_regions
         target_regions = ["서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시", 
                          "경기도", "강원도", "충청북도", "충청남도", "전라북도", "전라남도", "경상북도", "경상남도", "제주특별자치도", "세종특별자치시"]
     
-    # 1. getEgytListInfoInqire로 일반 응급의료기관 등급 정보 조회 (병렬 처리)
+    # 1. getEgytListInfoInqire로 일반 응급의료기관 등급 정보 조회 (병렬 처리, API 제한 고려)
     remaining_hpids = hpid_set.copy()
     if remaining_hpids:
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(_fetch_grade_info_for_region, region, remaining_hpids, EGET_LIST_URL, service_key)
                 for region in target_regions
@@ -99,10 +99,10 @@ def fetch_hospital_grade_info(hpids: List[str], service_key: str, target_regions
                 except Exception as e:
                     continue
     
-    # 2. getStrmListInfoInqire로 권역외상센터 정보 조회 (권역외상센터는 우선 적용, 병렬 처리)
+    # 2. getStrmListInfoInqire로 권역외상센터 정보 조회 (권역외상센터는 우선 적용, 병렬 처리, API 제한 고려)
     remaining_hpids = hpid_set - set(grade_info.keys())
     if remaining_hpids:
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
                 executor.submit(_fetch_grade_info_for_region, region, remaining_hpids, STRM_LIST_URL, service_key)
                 for region in target_regions
@@ -123,7 +123,32 @@ def fetch_hospital_grade_info(hpids: List[str], service_key: str, target_regions
 
 
 def fetch_baseinfo_by_hpid(hpid: str, service_key: str) -> Optional[Dict[str, Any]]:
-    """병원 기본정보 조회"""
+    """병원 기본정보 조회 (DB 캐싱 우선, 없으면 API 호출)"""
+    # DB에서 먼저 확인 (API 호출 제한 방지)
+    try:
+        from flask import has_app_context, current_app
+        # Flask app context가 있는 경우에만 DB 조회
+        if has_app_context():
+            hospital = Hospital.query.filter_by(hospital_id=hpid).first()
+            if hospital and hospital.latitude and hospital.longitude:
+                # DB에 좌표 정보가 있으면 DB 데이터 사용 (API 호출 건너뜀)
+                return {
+                    "hpid": hospital.hospital_id,
+                    "dutyName": hospital.name,
+                    "dutyAddr": hospital.address,
+                    "dutytel3": hospital.phone_number,
+                    "wgs84Lat": float(hospital.latitude),
+                    "wgs84Lon": float(hospital.longitude),
+                    "dutyDiv": None,
+                    "dutyDivNam": None,
+                    "dutyEmcls": None,
+                    "dutyEmclsName": hospital.hospital_grade,
+                }
+    except Exception as db_error:
+        # DB 조회 실패 시 API 호출로 진행
+        pass
+    
+    # DB에 없거나 좌표 정보가 없으면 API 호출
     try:
         r = http_get(EGET_BASE_URL, {"HPID": hpid, "pageNo": 1, "numOfRows": 1, "serviceKey": service_key})
         root = ET.fromstring(r.content)
@@ -148,7 +173,11 @@ def fetch_baseinfo_by_hpid(hpid: str, service_key: str) -> Optional[Dict[str, An
             "dutyEmclsName": g("dutyEmclsName"),
         }
     except Exception as e:
-        print(f"병원 기본정보 조회 오류 ({hpid}): {e}")
+        # 429 에러 등 API 제한 에러는 조용히 처리
+        if "429" in str(e) or "too many" in str(e).lower():
+            print(f"⚠️  병원 기본정보 조회 제한 ({hpid}): API 호출 제한 도달")
+        else:
+            print(f"병원 기본정보 조회 오류 ({hpid}): {e}")
         return None
 
 
@@ -207,7 +236,7 @@ def save_or_update_hospital(hospital_data: Dict[str, Any]) -> Optional[Hospital]
 
 
 def fetch_emergency_hospitals_in_region(sido: str, sigungu: Optional[str], service_key: str, max_items: int = 120) -> List[Dict[str, Any]]:
-    """지역 내 응급 병원 조회 (병렬 처리로 최적화, 최대 120개로 제한)"""
+    """지역 내 응급 병원 조회 (DB 캐싱 우선, 최대 120개로 제한)"""
     try:
         params = {"STAGE1": sido, "pageNo": 1, "numOfRows": min(500, max_items * 2), "serviceKey": service_key}
         if sigungu:
@@ -221,18 +250,61 @@ def fetch_emergency_hospitals_in_region(sido: str, sigungu: Optional[str], servi
                 hpids.append(el.text.strip())
         hpids = list(dict.fromkeys(hpids))[:max_items]  # 최대 개수 제한
         
-        # 병렬 처리로 병원 정보 조회 (최대 20개 동시 실행)
+        if not hpids:
+            return []
+        
         hospitals = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_hpid = {executor.submit(fetch_baseinfo_by_hpid, hpid, service_key): hpid for hpid in hpids}
-            for future in as_completed(future_to_hpid):
-                try:
-                    info = future.result()
-                    if info and info.get("wgs84Lat") and info.get("wgs84Lon"):
-                        hospitals.append(info)
-                except Exception as e:
-                    hpid = future_to_hpid[future]
-                    print(f"병원 정보 조회 오류 ({hpid}): {e}")
+        missing_hpids = []
+        
+        # DB에서 일괄 조회 (API 호출 최소화)
+        try:
+            from flask import has_app_context
+            if has_app_context():
+                db_hospitals = Hospital.query.filter(Hospital.hospital_id.in_(hpids)).filter(
+                    Hospital.latitude.isnot(None),
+                    Hospital.longitude.isnot(None)
+                ).all()
+                
+                # DB에 있는 병원들을 딕셔너리로 변환
+                db_hospital_dict = {h.hospital_id: h for h in db_hospitals}
+                
+                # DB에 있는 병원들은 DB 데이터 사용
+                for hpid in hpids:
+                    if hpid in db_hospital_dict:
+                        hospital = db_hospital_dict[hpid]
+                        hospitals.append({
+                            "hpid": hospital.hospital_id,
+                            "dutyName": hospital.name,
+                            "dutyAddr": hospital.address,
+                            "dutytel3": hospital.phone_number,
+                            "wgs84Lat": float(hospital.latitude),
+                            "wgs84Lon": float(hospital.longitude),
+                            "dutyDiv": None,
+                            "dutyDivNam": None,
+                            "dutyEmcls": None,
+                            "dutyEmclsName": hospital.hospital_grade,
+                        })
+                    else:
+                        missing_hpids.append(hpid)
+            else:
+                # app context가 없으면 모든 병원을 API로 조회
+                missing_hpids = hpids
+        except Exception as db_error:
+            # DB 조회 실패 시 모든 병원을 API로 조회
+            missing_hpids = hpids
+        
+        # DB에 없는 병원들만 API 호출 (병렬 처리, 최대 5개 동시 실행 - API 제한 고려)
+        if missing_hpids:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_hpid = {executor.submit(fetch_baseinfo_by_hpid, hpid, service_key): hpid for hpid in missing_hpids}
+                for future in as_completed(future_to_hpid):
+                    try:
+                        info = future.result()
+                        if info and info.get("wgs84Lat") and info.get("wgs84Lon"):
+                            hospitals.append(info)
+                    except Exception as e:
+                        hpid = future_to_hpid[future]
+                        print(f"병원 정보 조회 오류 ({hpid}): {e}")
         
         return hospitals
     except Exception as e:
@@ -330,22 +402,68 @@ def fetch_trauma_centers_in_region(sido: str, sigungu: Optional[str], service_ke
             if len(items_with_grade) >= max_items:
                 break
         
-        # 병렬 처리로 병원 기본정보 조회 (최대 20개 동시 실행)
+        if not items_with_grade:
+            return []
+        
         hospitals = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_item = {executor.submit(fetch_baseinfo_by_hpid, item["hpid"], service_key): item for item in items_with_grade}
-            for future in as_completed(future_to_item):
-                try:
-                    info = future.result()
-                    item = future_to_item[future]
-                    if info and info.get("wgs84Lat") and info.get("wgs84Lon"):
-                        # 외상센터 등급 정보 추가
-                        info["dutyEmcls"] = item.get("dutyEmcls") or info.get("dutyEmcls")
-                        info["dutyEmclsName"] = item.get("dutyEmclsName") or info.get("dutyEmclsName")
-                        hospitals.append(info)
-                except Exception as e:
-                    hpid = future_to_item[future]["hpid"]
-                    print(f"외상센터 정보 조회 오류 ({hpid}): {e}")
+        missing_items = []
+        
+        # DB에서 일괄 조회 (API 호출 최소화)
+        try:
+            from flask import has_app_context
+            if has_app_context():
+                hpids = [item["hpid"] for item in items_with_grade]
+                db_hospitals = Hospital.query.filter(Hospital.hospital_id.in_(hpids)).filter(
+                    Hospital.latitude.isnot(None),
+                    Hospital.longitude.isnot(None)
+                ).all()
+                
+                # DB에 있는 병원들을 딕셔너리로 변환
+                db_hospital_dict = {h.hospital_id: h for h in db_hospitals}
+                
+                # DB에 있는 병원들은 DB 데이터 사용
+                for item in items_with_grade:
+                    hpid = item["hpid"]
+                    if hpid in db_hospital_dict:
+                        hospital = db_hospital_dict[hpid]
+                        hospital_info = {
+                            "hpid": hospital.hospital_id,
+                            "dutyName": hospital.name,
+                            "dutyAddr": hospital.address,
+                            "dutytel3": hospital.phone_number,
+                            "wgs84Lat": float(hospital.latitude),
+                            "wgs84Lon": float(hospital.longitude),
+                            "dutyDiv": None,
+                            "dutyDivNam": None,
+                            "dutyEmcls": item.get("dutyEmcls"),
+                            "dutyEmclsName": item.get("dutyEmclsName") or hospital.hospital_grade,
+                        }
+                        hospitals.append(hospital_info)
+                    else:
+                        missing_items.append(item)
+            else:
+                # app context가 없으면 모든 병원을 API로 조회
+                missing_items = items_with_grade
+        except Exception as db_error:
+            # DB 조회 실패 시 모든 병원을 API로 조회
+            missing_items = items_with_grade
+        
+        # DB에 없는 병원들만 API 호출 (병렬 처리, 최대 5개 동시 실행 - API 제한 고려)
+        if missing_items:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_item = {executor.submit(fetch_baseinfo_by_hpid, item["hpid"], service_key): item for item in missing_items}
+                for future in as_completed(future_to_item):
+                    try:
+                        info = future.result()
+                        item = future_to_item[future]
+                        if info and info.get("wgs84Lat") and info.get("wgs84Lon"):
+                            # 외상센터 등급 정보 추가
+                            info["dutyEmcls"] = item.get("dutyEmcls") or info.get("dutyEmcls")
+                            info["dutyEmclsName"] = item.get("dutyEmclsName") or info.get("dutyEmclsName")
+                            hospitals.append(info)
+                    except Exception as e:
+                        hpid = future_to_item[future]["hpid"]
+                        print(f"외상센터 정보 조회 오류 ({hpid}): {e}")
         
         return hospitals
     except Exception as e:

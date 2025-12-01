@@ -16,6 +16,8 @@ from services.hospital_service import (
 )
 from utils.geo import calculate_distance, get_driving_info_kakao, guess_region_from_address
 from utils.http import safe_int
+from models import APICallLog, db
+from datetime import date, datetime
 
 
 def register_hospitals_routes(app):
@@ -331,4 +333,61 @@ def register_hospitals_routes(app):
             error_detail = traceback.format_exc()
             print(f"병원 조회 오류: {error_detail}")
             return jsonify({"error": f"병원 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+    
+    @app.route('/api/hospitals/api-usage', methods=['GET'])
+    def api_hospitals_api_usage():
+        """공공데이터포털 API 호출 횟수 확인"""
+        try:
+            today = date.today()
+            
+            # 오늘 날짜의 호출 횟수
+            today_count = APICallLog.query.filter_by(call_date=today).count()
+            
+            # 오늘 날짜의 성공/실패 횟수
+            today_success = APICallLog.query.filter_by(call_date=today, is_success=True).count()
+            today_failed = APICallLog.query.filter_by(call_date=today, is_success=False).count()
+            
+            # 엔드포인트별 호출 횟수
+            endpoint_counts = {}
+            endpoints = ["getEgytBassInfoInqire", "getEgytListInfoInqire", "getStrmListInfoInqire", "getEmrrmRltmUsefulSckbdInfoInqire"]
+            for endpoint in endpoints:
+                count = APICallLog.query.filter_by(call_date=today, api_endpoint=endpoint).count()
+                if count > 0:
+                    endpoint_counts[endpoint] = count
+            
+            # 최근 10개 호출 로그
+            recent_logs = APICallLog.query.filter_by(call_date=today).order_by(APICallLog.called_at.desc()).limit(10).all()
+            recent_logs_data = [
+                {
+                    "endpoint": log.api_endpoint,
+                    "status_code": log.status_code,
+                    "is_success": log.is_success,
+                    "called_at": log.called_at.isoformat() if log.called_at else None
+                }
+                for log in recent_logs
+            ]
+            
+            # 하루 제한 (1000개)
+            daily_limit = 1000
+            remaining = max(0, daily_limit - today_count)
+            
+            return jsonify({
+                "today": {
+                    "date": today.isoformat(),
+                    "total_calls": today_count,
+                    "success_calls": today_success,
+                    "failed_calls": today_failed,
+                    "remaining_calls": remaining,
+                    "daily_limit": daily_limit,
+                    "usage_percentage": round((today_count / daily_limit) * 100, 2) if daily_limit > 0 else 0
+                },
+                "endpoint_counts": endpoint_counts,
+                "recent_logs": recent_logs_data
+            }), 200
+            
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"API 사용량 조회 오류: {error_detail}")
+            return jsonify({"error": f"API 사용량 조회 중 오류가 발생했습니다: {str(e)}"}), 500
 

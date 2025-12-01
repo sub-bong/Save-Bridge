@@ -33,7 +33,7 @@ if not OPENAI_API_KEY:
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_CALLER_NUMBER = os.getenv("TWILIO_CALLER_NUMBER")
-TWILIO_FALLBACK_TARGET = os.getenv("TWILIO_FALLBACK_TARGET", "01049323766")
+TWILIO_FALLBACK_TARGET = os.getenv("TWILIO_FALLBACK_TARGET", "01047871547")
 TWILIO_CALLBACK_BASE_URL = os.getenv("TWILIO_CALLBACK_BASE_URL")
 
 # API URL
@@ -86,16 +86,11 @@ PROVINCE_INCLUDE_METROS: dict = {
 FLASK_PORT = 5001
 CORS_ORIGINS = [
     "http://localhost:5173", 
-    "http://localhost:5174", 
     "http://localhost:3000",
     "https://localhost:5173",  # HTTPS localhost 추가
-    "https://localhost:5174",
     "http://10.50.1.62:5173",  
-    "http://10.50.1.62:5174",
     "https://10.50.1.62:5173",  # HTTPS 로컬 IP 추가
-    "https://10.50.1.62:5174",
     "http://sondongbin-ui-MacBookPro.local:5173",  # .local 도메인 (모바일 카메라 접근용)
-    "http://sondongbin-ui-MacBookPro.local:5174",
 ]
 # 데이터베이스 설정
 # SQLite 데이터베이스 파일 경로

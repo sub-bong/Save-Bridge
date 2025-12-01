@@ -136,3 +136,20 @@ class ChatMessage(db.Model):
 
     def __repr__(self):
         return f"ChatMessage('{self.message_id}', Sender='{self.sender_type}')"
+
+
+#### API 호출 로그 (공공데이터포털 API 호출 횟수 추적)
+class APICallLog(db.Model):
+    __tablename__ = 'api_call_log'
+    
+    # 컬럼 정의
+    log_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    api_url = db.Column(db.String(500), nullable=False)  # 호출한 API URL
+    api_endpoint = db.Column(db.String(200), nullable=True)  # API 엔드포인트 (예: getEgytBassInfoInqire)
+    status_code = db.Column(db.Integer, nullable=True)  # HTTP 상태 코드
+    is_success = db.Column(db.Boolean, nullable=False, default=True)  # 성공 여부
+    called_at = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())  # 호출 시간
+    call_date = db.Column(db.Date, nullable=False, default=db.func.current_date())  # 호출 날짜 (하루 단위 집계용)
+    
+    def __repr__(self):
+        return f"APICallLog('{self.api_endpoint}', Status={self.status_code}, Date={self.call_date}')"
