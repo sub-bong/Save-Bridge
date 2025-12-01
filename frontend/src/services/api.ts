@@ -17,6 +17,21 @@ const API_BASE_URL = getApiBaseUrl();
 // axios 기본 설정 (쿠키 포함)
 axios.defaults.withCredentials = true;
 
+// 이미지 URL을 전체 URL로 변환하는 헬퍼 함수
+export const getImageUrl = (imagePathOrUrl: string | null | undefined): string | undefined => {
+  if (!imagePathOrUrl) return undefined;
+  
+  // 이미 전체 URL인 경우 그대로 반환
+  if (imagePathOrUrl.startsWith('http://') || imagePathOrUrl.startsWith('https://') || imagePathOrUrl.startsWith('blob:') || imagePathOrUrl.startsWith('data:')) {
+    return imagePathOrUrl;
+  }
+  
+  // 상대 경로인 경우 전체 URL로 변환
+  const baseUrl = API_BASE_URL.replace(/\/$/, ''); // 끝의 슬래시 제거
+  const imagePath = imagePathOrUrl.startsWith('/') ? imagePathOrUrl : `/${imagePathOrUrl}`;
+  return `${baseUrl}${imagePath}`;
+};
+
 // 주소 → 좌표 변환
 export const addressToCoord = async (address: string): Promise<{ lat: number; lon: number; sido?: string; sigungu?: string } | null> => {
   if (!address.trim()) {
@@ -149,7 +164,7 @@ export const searchHospitals = async (
 };
 
 // STT 음성 인식
-export const transcribeAudio = async (audioFile: File): Promise<string> => {
+export const transcribeAudio = async (audioFile: File): Promise<{ text: string; sbarSummary?: string; arsNarrative?: string }> => {
   try {
     const formData = new FormData();
     formData.append("audio", audioFile);
@@ -160,7 +175,11 @@ export const transcribeAudio = async (audioFile: File): Promise<string> => {
         // Content-Type을 명시하지 않아야 axios가 boundary를 자동으로 설정합니다
       },
     });
-    return res.data?.text || "";
+    return {
+      text: res.data?.text || "",
+      sbarSummary: res.data?.sbar_summary || undefined,
+      arsNarrative: res.data?.ars_narrative || undefined  // ARS 서비스용 자연스러운 문장
+    };
   } catch (error: any) {
     console.error("음성 인식 실패:", error);
 
@@ -179,6 +198,23 @@ export const transcribeAudio = async (audioFile: File): Promise<string> => {
     }
 
     throw new Error(errorMessage);
+  }
+};
+
+// 텍스트를 SBAR 형식으로 변환
+export const convertTextToSBAR = async (text: string): Promise<{ text: string; sbarSummary?: string; arsNarrative?: string }> => {
+  try {
+    const res = await axios.post(`${API_BASE_URL}/api/stt/convert-to-sbar`, {
+      text: text,
+    });
+    return {
+      text: res.data?.text || "",
+      sbarSummary: res.data?.sbar_summary || undefined,
+      arsNarrative: res.data?.ars_narrative || undefined  // ARS 서비스용 자연스러운 문장
+    };
+  } catch (error: any) {
+    console.error("텍스트→SBAR 변환 실패:", error);
+    throw new Error(error.response?.data?.message || "텍스트 변환 중 오류가 발생했습니다.");
   }
 };
 

@@ -40,10 +40,10 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
   const meetsConditions = hospital._meets_conditions ?? false;
   const statusKey: ApprovalStatus = isRejected ? "rejected" : approvalStatus;
   const statusMap: Record<ApprovalStatus, { label: string; className: string }> = {
-    pending: { label: "대기 중", className: "bg-gray-200 text-gray-800" },
-    calling: { label: "환자 수용 요청중...", className: "bg-amber-100 text-amber-900 border border-amber-300" },
-    approved: { label: "환자 수용 확정", className: "bg-green-100 text-green-800 border border-green-400" },
-    rejected: { label: "환자 수용 거절", className: "bg-red-100 text-red-800 border border-red-300" },
+    pending: { label: "대기 중", className: "bg-slate-200 text-slate-800" },
+    calling: { label: "환자 수용 요청중...", className: "bg-amber-50 text-amber-900 border border-amber-300" },
+    approved: { label: "환자 수용 확정", className: "bg-green-50 text-green-800 border border-green-400" },
+    rejected: { label: "환자 수용 거절", className: "bg-red-50 text-red-800 border border-red-300" },
   };
   const statusMeta = statusMap[statusKey];
   const distanceLabel =
@@ -65,14 +65,14 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
     : null;
   const cardTone =
     statusKey === "approved"
-      ? "bg-emerald-50 border-emerald-500"
+      ? "bg-green-50 border-green-500"
       : statusKey === "rejected"
-      ? "bg-gray-100 border-gray-300 opacity-80"
+      ? "bg-slate-100 border-slate-300 opacity-80"
       : isActiveCandidate
-      ? "bg-white border-blue-500 shadow-lg"
+      ? "bg-white border-slate-600 shadow-lg"
       : meetsConditions
-      ? "bg-blue-50 border-blue-300"
-      : "bg-gray-50 border-gray-200";
+      ? "bg-slate-50 border-slate-400"
+      : "bg-white border-slate-200";
 
   return (
     <div
@@ -88,12 +88,12 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
             <div className="text-base font-bold text-gray-900 flex items-center gap-2 flex-wrap">
               {hospital.dutyName || "병원 명칭 미상"}
               {isActiveCandidate && (
-                <span className="text-xs bg-blue-700 text-white px-3 py-1 rounded-full font-semibold">
+                <span className="text-xs bg-slate-700 text-white px-3 py-1 rounded-full font-semibold">
                   현재 요청 대상
                 </span>
               )}
               {meetsConditions && (
-                <span className="text-xs bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-semibold">
+                <span className="text-xs bg-slate-100 text-slate-800 px-3 py-1 rounded-full font-semibold">
                   증상 맞춤 병원
                 </span>
               )}
@@ -108,12 +108,12 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
                 {emergencyClass}
               </span>
               {emergencyBadge && (
-                <span className="px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 font-semibold">
+                <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-800 font-semibold">
                   {emergencyBadge}
                 </span>
               )}
               {region?.sigungu && hospital.region_name && hospital.region_name !== region.sigungu && (
-                <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-800 font-semibold">
+                <span className="px-2 py-1 rounded-full bg-amber-50 text-amber-800 font-semibold">
                   인접 행정구역
                 </span>
               )}
@@ -152,7 +152,7 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
         </div>
       )}
       {statusKey === "approved" && (
-        <div className="text-sm text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+        <div className="text-sm text-green-900 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
           환자 수용이 확정되었습니다. 추가 병원 탐색과 통화 시도를 중단합니다.
         </div>
       )}
@@ -199,8 +199,8 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
           }}
           className={`w-full inline-flex items-center justify-between gap-3 rounded-2xl px-5 py-4 text-sm font-bold shadow-md border ${
             hospital.dutytel3
-              ? "bg-gradient-to-r from-rose-600 to-red-600 text-white hover:from-rose-700 hover:to-red-700 border-transparent"
-              : "bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed"
+              ? "bg-slate-900 text-white hover:bg-slate-800 border-transparent"
+              : "bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed"
           }`}
         >
           <span className="flex flex-col gap-0.5 text-left">
@@ -223,7 +223,7 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
 
         {statusKey === "approved" && onOpenChat && (
           <button
-            className="w-full inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-4 text-sm font-bold shadow-md bg-emerald-600 text-white hover:bg-emerald-700"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-4 text-sm font-bold shadow-md bg-green-600 text-white hover:bg-green-700"
             onClick={() => onOpenChat(hospital)}
           >
             수용 현황 메모 열기
@@ -233,19 +233,19 @@ export const HospitalCard: React.FC<HospitalCardProps> = ({
         {canInteract && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
-              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-emerald-500 to-green-600 text-white hover:from-emerald-600 hover:to-green-700"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-green-600 text-white hover:bg-green-700"
               onClick={() => onApprove(hospital)}
             >
               <span>수용 확정</span>
             </button>
             <button
-              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-red-500 to-rose-600 text-white hover:from-red-600 hover:to-rose-700"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-red-600 text-white hover:bg-red-700"
               onClick={() => onReject(hospital)}
             >
               <span>수용 불가</span>
             </button>
             <button
-              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-gradient-to-r from-sky-500 to-blue-600 text-white hover:from-sky-600 hover:to-blue-700"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold shadow-md bg-slate-700 text-white hover:bg-slate-800"
               onClick={() => onStartCall(hospital)}
             >
               <span>ARS 재요청</span>

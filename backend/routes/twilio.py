@@ -9,36 +9,92 @@ from datetime import datetime
 from models import db, RequestAssignment, ChatSession
 
 
-def register_twilio_routes(app, call_responses, call_metadata):
+def register_twilio_routes(app, call_responses, call_metadata, socketio=None):
     """Twilio 콜백 라우트 등록"""
     
-    @app.route('/twilio/gather', methods=['POST'])
+    @app.route('/twilio/gather', methods=['POST', 'GET'])
     def twilio_gather_callback():
         """Twilio Gather 콜백 - 다이얼 입력 받기"""
-        digits = request.form.get('Digits', '')
+        from flask import Response
+        
+        # 모든 요청 파라미터 로그
+        print(f"\n{'='*60}")
+        print(f" [Twilio Gather Callback]")
+        print(f"{'='*60}")
+        print(f" 요청 메서드: {request.method}")
+        print(f" 요청 헤더 User-Agent: {request.headers.get('User-Agent', 'N/A')}")
+        for key, value in request.form.items():
+            print(f"   {key}: {value[:200] if value and len(str(value)) > 200 else value}")
+        
         call_sid = request.form.get('CallSid', '')
-        patient_info = call_metadata.get(call_sid, {}).get("patient_info") or call_responses.get(call_sid, {}).get("patient_info")
+        digits = request.form.get('Digits', '').strip() if request.form.get('Digits') else ''
         
-        print(f"\n [Twilio Callback] Call SID: {call_sid}")
-        print(f" 입력된 다이얼: {digits}")
+        print(f"\n 📞 콜백 정보:")
+        print(f"   Call SID: {call_sid}")
+        print(f"   Digits: '{digits}' (길이: {len(digits)})")
         
-        # 응답 TwiML 생성
+        # patient_info 찾기
+        patient_info = None
+        if call_sid:
+            if call_sid in call_metadata:
+                patient_info = call_metadata[call_sid].get("patient_info")
+            if not patient_info and call_sid in call_responses:
+                patient_info = call_responses[call_sid].get("patient_info")
+        
+        print(f"   patient_info: {'있음' if patient_info else '없음'}")
+        if patient_info:
+            print(f"   patient_info 길이: {len(patient_info)}")
+            print(f"   patient_info 내용: {patient_info[:200]}...")
+        
         response = VoiceResponse()
         
-        if not digits:
-            message = patient_info or "응급환자 상태 정보가 전달되지 않았습니다."
+        # digits가 "1" 또는 "2"가 아니면 ARS 안내 (첫 호출 또는 재호출)
+        if digits not in ['1', '2']:
+            print(f" ✅ ARS 안내 시작 (digits가 유효하지 않음: '{digits}')")
+            
+            # ARS 메시지 준비
+            if patient_info and patient_info.strip():
+                ars_message = patient_info.strip()
+                print(f"   ✓ patient_info 사용")
+            else:
+                ars_message = "응급환자 수용 요청입니다. 환자 상태 정보를 확인하시고 수용 여부를 선택해 주세요."
+                print(f"   ⚠ 기본 메시지 사용 (patient_info 없음)")
+            
+            print(f"   ARS 메시지: {ars_message[:150]}...")
+            
+            # Gather로 입력 받기
             gather = response.gather(
                 numDigits=1,
                 action="/twilio/gather",
                 method="POST",
-                timeout=8
+                timeout=15
             )
-            gather.say(message, language="ko-KR", voice="Polly.Seoyeon")
-            gather.pause(length=1)
+            gather.say(ars_message, language="ko-KR", voice="Polly.Seoyeon")
+            gather.pause(length=2)
             gather.say("해당 환자 수용이 가능하시면 1번, 수용이 불가능하시면 2번을 눌러주세요.", language="ko-KR", voice="Polly.Seoyeon")
-            return str(response), 200, {'Content-Type': 'text/xml'}
+            
+            # 타임아웃 시 재안내
+            response.redirect("/twilio/gather", method="POST")
+            
+            twiml = str(response)
+            print(f" ✅ TwiML 생성 완료 (길이: {len(twiml)})")
+            print(f"   TwiML 일부: {twiml[:300]}...")
+            
+            # ngrok 인터셉터 우회를 위한 헤더 설정
+            resp = Response(
+                twiml,
+                mimetype='text/xml',
+                headers={
+                    'Content-Type': 'text/xml; charset=utf-8',
+                    'X-Content-Type-Options': 'nosniff',
+                }
+            )
+            return resp
         
-        # 입력값 저장 (메모리 - 하위 호환성)
+        # digits가 "1" 또는 "2"인 경우 - 응답 처리
+        print(f" ✅ 유효한 입력: '{digits}'")
+        
+        # 메모리에 저장
         record = call_responses.setdefault(call_sid, {})
         record.update({
             "digit": digits,
@@ -46,14 +102,14 @@ def register_twilio_routes(app, call_responses, call_metadata):
             "patient_info": patient_info
         })
         
-        # DB에 저장: RequestAssignment 업데이트
+        # DB에 저장
         try:
             assignment = RequestAssignment.query.filter_by(twillio_sid=call_sid).first()
             if assignment:
                 if digits == "1":
                     assignment.response_status = "승인"
                     assignment.responded_at = datetime.now()
-                    # 승인된 경우 ChatSession 생성
+                    # ChatSession 생성
                     existing_session = ChatSession.query.filter_by(request_id=assignment.request_id).first()
                     if not existing_session:
                         chat_session = ChatSession(
@@ -62,30 +118,65 @@ def register_twilio_routes(app, call_responses, call_metadata):
                             started_at=datetime.now()
                         )
                         db.session.add(chat_session)
-                    print(" 1번 입력 - 입실 승인 (DB 저장됨)")
+                    print(" ✅ 입실 승인 (DB 저장)")
+                    
+                    # Socket.IO 알림
+                    if socketio:
+                        try:
+                            socketio.emit('hospital_approved', {
+                                'request_id': assignment.request_id,
+                                'assignment_id': assignment.assignment_id,
+                                'hospital_id': assignment.hospital_id,
+                                'call_sid': call_sid
+                            }, namespace='/')
+                            print(f" 📡 Socket.IO 승인 알림 전송")
+                        except Exception as e:
+                            print(f" ⚠️ Socket.IO 알림 실패: {e}")
+                            
+                    response.say("입실 승인 확인되었습니다. 감사합니다.", language="ko-KR", voice="Polly.Seoyeon")
+                    
                 elif digits == "2":
                     assignment.response_status = "거절"
                     assignment.responded_at = datetime.now()
-                    print(" 2번 입력 - 입실 거절 (DB 저장됨)")
-                else:
-                    print(f" 잘못된 입력: {digits}")
+                    print(" ✅ 입실 거절 (DB 저장)")
+                    
+                    # Socket.IO 알림
+                    if socketio:
+                        try:
+                            socketio.emit('hospital_rejected', {
+                                'request_id': assignment.request_id,
+                                'assignment_id': assignment.assignment_id,
+                                'hospital_id': assignment.hospital_id,
+                                'call_sid': call_sid
+                            }, namespace='/')
+                            print(f" 📡 Socket.IO 거절 알림 전송")
+                        except Exception as e:
+                            print(f" ⚠️ Socket.IO 알림 실패: {e}")
+                    
+                    response.say("입실 불가 확인되었습니다. 다른 병원을 찾겠습니다.", language="ko-KR", voice="Polly.Seoyeon")
                 
                 db.session.commit()
             else:
-                print(f" Warning: Call SID {call_sid}에 해당하는 RequestAssignment를 찾을 수 없습니다.")
+                print(f" ⚠️ RequestAssignment를 찾을 수 없음: {call_sid}")
         except Exception as e:
             db.session.rollback()
             import traceback
-            print(f" DB 저장 오류: {traceback.format_exc()}")
+            print(f" ❌ DB 저장 오류: {traceback.format_exc()}")
         
-        if digits == "1":
-            response.say("입실 승인 확인되었습니다. 감사합니다.", language="ko-KR", voice="Polly.Seoyeon")
-        elif digits == "2":
-            response.say("입실 불가 확인되었습니다. 다른 병원을 찾겠습니다.", language="ko-KR", voice="Polly.Seoyeon")
-        else:
-            response.say("잘못된 입력입니다.", language="ko-KR", voice="Polly.Seoyeon")
+        twiml = str(response)
+        print(f" ✅ TwiML 생성 완료 (길이: {len(twiml)})")
         
-        return str(response), 200, {'Content-Type': 'text/xml'}
+        # ngrok 인터셉터 우회를 위한 헤더 설정
+        from flask import Response
+        resp = Response(
+            twiml,
+            mimetype='text/xml',
+            headers={
+                'Content-Type': 'text/xml; charset=utf-8',
+                'X-Content-Type-Options': 'nosniff',
+            }
+        )
+        return resp
 
     @app.route('/twilio/status', methods=['POST'])
     def twilio_status_callback():
@@ -93,9 +184,9 @@ def register_twilio_routes(app, call_responses, call_metadata):
         call_sid = request.form.get('CallSid', '')
         call_status = request.form.get('CallStatus', '')
         
-        print(f"\n [통화 상태] Call SID: {call_sid}, Status: {call_status}")
+        print(f"\n 📞 [통화 상태] Call SID: {call_sid}, Status: {call_status}")
         
-        # 메모리에 저장 (하위 호환성)
+        # 메모리에 저장
         record = call_responses.setdefault(call_sid, {})
         record['status'] = call_status or record.get('status')
         
@@ -113,7 +204,7 @@ def register_twilio_routes(app, call_responses, call_metadata):
         for call_sid, data in call_responses.items():
             digit = data.get('digit')
             timestamp = data.get('timestamp')
-            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+            time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)) if timestamp else "N/A"
             
             status = "승인" if digit == "1" else "거절" if digit == "2" else "기타"
             
@@ -203,4 +294,3 @@ def register_twilio_routes(app, call_responses, call_metadata):
         """저장된 응답 초기화"""
         call_responses.clear()
         return "<h2>모든 응답이 초기화되었습니다.</h2><br><a href='/'>홈으로</a>"
-

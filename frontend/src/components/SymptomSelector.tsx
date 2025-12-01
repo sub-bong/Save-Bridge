@@ -31,14 +31,14 @@ export const SymptomSelector: React.FC<SymptomSelectorProps> = ({
         응급환자 증상 분류
       </h2>
       
-      <label className="text-sm font-semibold text-gray-700 mb-2 block">증상 카테고리 선택</label>
+      <label className="text-sm font-semibold text-slate-700 mb-2 block">증상 카테고리 선택</label>
       {patientAgeGroup && (
-        <div className="mb-2 text-xs text-blue-700 font-semibold">
+        <div className="mb-2 text-xs text-slate-700 font-semibold">
           {patientAgeGroup === "adult" ? "성인 환자로 감지됨" : "소아 환자로 감지됨"}
         </div>
       )}
       <select
-        className="w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        className="w-full rounded-lg border-2 border-slate-300 px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-slate-600 focus:border-slate-600"
         value={symptom}
         onChange={(e) => setSymptom(e.target.value)}
       >
@@ -53,28 +53,28 @@ export const SymptomSelector: React.FC<SymptomSelectorProps> = ({
       )}
       
       {/* 증상 기반 자동 우선순위 안내 */}
-      <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-        <p className="text-xs text-blue-800 font-semibold">
+      <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+        <p className="text-xs text-slate-800 font-semibold">
           {getPriorityMessage()}
         </p>
       </div>
 
       {/* 필수 장비/병상 정보 표시 */}
-      <div className="mt-4 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg">
-        <p className="text-sm text-blue-900 font-bold mb-2">필요한 병원 시설</p>
+      <div className="mt-4 p-4 bg-slate-50 border-2 border-slate-300 rounded-lg">
+        <p className="text-sm text-slate-900 font-bold mb-2">필요한 병원 시설</p>
         {getRequiredFacilities(symptom).length > 0 && (
-          <p className="text-sm text-gray-800 mb-2">
+          <p className="text-sm text-slate-800 mb-2">
             <span className="font-semibold text-red-700">필수 장비:</span> {getRequiredFacilities(symptom).join(", ")}
           </p>
         )}
         {getRequiredBeds(symptom).length > 0 && (
-          <p className="text-sm text-gray-800 mb-2">
+          <p className="text-sm text-slate-800 mb-2">
             <span className="font-semibold text-red-700">필수 병상:</span> {getRequiredBeds(symptom).join(", ")}
           </p>
         )}
         {getNiceToHaveBeds(symptom).length > 0 && (
-          <p className="text-sm text-gray-800">
-            <span className="font-semibold text-blue-700">우선 병상:</span> {getNiceToHaveBeds(symptom).join(", ")}
+          <p className="text-sm text-slate-800">
+            <span className="font-semibold text-slate-700">우선 병상:</span> {getNiceToHaveBeds(symptom).join(", ")}
           </p>
         )}
       </div>
@@ -118,7 +118,7 @@ export const HospitalSearchButtons: React.FC<HospitalSearchButtonsProps> = ({
   return (
     <div className="mt-4">
       <button
-        className="w-full rounded-lg bg-green-700 text-white text-base font-bold py-4 flex items-center justify-center hover:bg-green-800 active:bg-green-900 disabled:bg-gray-400 disabled:text-gray-600 transition shadow-lg min-h-[56px]"
+        className="w-full rounded-lg bg-slate-900 text-white text-base font-bold py-4 flex items-center justify-center hover:bg-slate-800 active:bg-slate-950 disabled:bg-slate-400 disabled:text-slate-600 transition shadow-lg min-h-[56px]"
         onClick={onSearchHospitals}
         disabled={loadingHospitals || !hasCoords || !hasRegion}
       >
@@ -135,7 +135,7 @@ export const HospitalSearchButtons: React.FC<HospitalSearchButtonsProps> = ({
       )}
       <div className="mt-4 flex flex-col gap-2">
         <button
-          className={`w-full rounded-full bg-blue-700 text-white text-base font-semibold py-4 shadow-md transition hover:bg-blue-800 active:bg-blue-900 min-h-[52px] ${
+          className={`w-full rounded-full bg-slate-700 text-white text-base font-semibold py-4 shadow-md transition hover:bg-slate-800 active:bg-slate-900 min-h-[52px] ${
             !hasCallableHospital || !!approvedHospital || hospitalsLength === 0 || twilioAutoCalling
               ? "opacity-60 cursor-not-allowed"
               : ""

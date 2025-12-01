@@ -28,6 +28,7 @@ import { MapDisplay } from "./MapDisplay";
 import { ApprovedHospitalInfo } from "./ApprovedHospitalInfo";
 import { ParamedicChatSlideOver } from "./ParamedicChatSlideOver";
 import { KakaoAmbulanceMap } from "./KakaoAmbulanceMap";
+import { getSocket } from "../services/socket";
 
 export const SafeBridgeApp: React.FC = () => {
   const [address, setAddress] = useState<string>("");
@@ -97,6 +98,7 @@ export const SafeBridgeApp: React.FC = () => {
     };
     loadUser();
   }, []);
+
 
   // 로그아웃 모달 열기
   const handleLogoutClick = () => {
@@ -353,6 +355,61 @@ export const SafeBridgeApp: React.FC = () => {
     }
   };
 
+  // 인계완료 후 화면 초기화 함수
+  const handleResetAfterHandover = useCallback(() => {
+    console.log("🔄 인계완료 - 메인화면 초기화 중...");
+    
+    // 채팅 관련 상태 초기화
+    setIsChatOpen(false);
+    setChatSession(null);
+    
+    // 환자 정보 초기화
+    setSttText("");
+    setSbarText("");
+    setArsSource(null);
+    setPatientSex(null);
+    setPatientAgeBand(null);
+    setAudioFile(null);
+    setVoiceMode(false);
+    setInputMode("stt");
+    
+    // 병원 관련 상태 초기화
+    setHospitals([]);
+    setBackupHospitals([]);
+    setNeighborHospitals([]);
+    setApprovedHospital(null);
+    setHospitalApprovalStatus({});
+    setRejectedHospitals(new Set());
+    setCurrentHospitalIndex(0);
+    setShowHospitalPanel(false);
+    setHasExhaustedHospitals(false);
+    setTwilioAutoCalling(false);
+    setActiveCalls({});
+    setRoutePaths({});
+    setRerollCount(0);
+    setCurrentRequestId(0);
+    
+    // 증상 및 우선순위 초기화
+    setSymptom("뇌졸중 의심(FAST+)");
+    setPriorityModes(["distance"]);
+    
+    // 녹음 관련 초기화
+    setIsRecording(false);
+    setRecordingError("");
+    setMicLevel(0);
+    
+    // 색상 맵 초기화
+    colorMapRef.current = {};
+    
+    // 진행 중인 전화 타임아웃 정리
+    Object.values(callTimeoutsRef.current).forEach((timeout) => {
+      if (timeout) clearTimeout(timeout);
+    });
+    callTimeoutsRef.current = {};
+    
+    console.log("✅ 메인화면 초기화 완료 - 다음 환자 인계 준비됨");
+  }, []);
+
   const handleSearchHospitals = async () => {
     if (!coords.lat || !coords.lon) {
       alert("위치를 먼저 설정해주세요.");
@@ -414,7 +471,16 @@ export const SafeBridgeApp: React.FC = () => {
       if (result.route_paths) {
         setRoutePaths(result.route_paths);
       }
+      // top3 병원 경로 정보 조회 및 업데이트
       await fetchRoutePaths(uniqueHospitals, { updateDistances: true });
+      // 백업 병원 경로 정보 조회 및 업데이트
+      if (uniqueBackup.length > 0) {
+        await fetchRoutePaths(uniqueBackup, { append: true, updateBackup: true });
+      }
+      // 인접 병원 경로 정보 조회 및 업데이트
+      if (uniqueNeighbor.length > 0) {
+        await fetchRoutePaths(uniqueNeighbor, { append: true, updateNeighbor: true });
+      }
 
       // EmergencyRequest 생성 (DB에 저장)
       if (currentUser && uniqueHospitals.length > 0) {
@@ -446,14 +512,12 @@ export const SafeBridgeApp: React.FC = () => {
         }
       }
 
-      // [자동 전화 기능 - 필요시 주석 해제]
-      // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
-      // if (uniqueHospitals.length > 0) {
-      //   setTwilioAutoCalling(true); // Start auto-calling
-      // } else {
-      //   setTwilioAutoCalling(false);
-      // }
-      setTwilioAutoCalling(false); // 테스트 환경: 자동 전화 비활성화
+      // 병원 조회 후 자동 전화 시작
+      if (uniqueHospitals.length > 0) {
+        setTwilioAutoCalling(true); // Start auto-calling
+      } else {
+        setTwilioAutoCalling(false);
+      }
     } catch (error: any) {
       console.error("병원 조회 오류:", error);
       alert(error.message || "병원 조회 중 오류가 발생했습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
@@ -463,7 +527,7 @@ export const SafeBridgeApp: React.FC = () => {
   };
 
   const fetchRoutePaths = useCallback(
-    async (targetHospitals: Hospital[], options?: { append?: boolean; updateDistances?: boolean }) => {
+    async (targetHospitals: Hospital[], options?: { append?: boolean; updateDistances?: boolean; updateBackup?: boolean; updateNeighbor?: boolean }) => {
       if (!coords.lat || !coords.lon || !targetHospitals?.length) return;
 
       const paths: Record<string, number[][]> = {};
@@ -502,6 +566,36 @@ export const SafeBridgeApp: React.FC = () => {
           })
         );
       }
+      if (options?.updateBackup && Object.keys(meta).length > 0) {
+        setBackupHospitals((prev) =>
+          prev.map((h) => {
+            const key = h.hpid || "";
+            if (meta[key]) {
+              return {
+                ...h,
+                distance_km: meta[key].distance_km ?? h.distance_km,
+                eta_minutes: meta[key].eta_minutes ?? h.eta_minutes,
+              };
+            }
+            return h;
+          })
+        );
+      }
+      if (options?.updateNeighbor && Object.keys(meta).length > 0) {
+        setNeighborHospitals((prev) =>
+          prev.map((h) => {
+            const key = h.hpid || "";
+            if (meta[key]) {
+              return {
+                ...h,
+                distance_km: meta[key].distance_km ?? h.distance_km,
+                eta_minutes: meta[key].eta_minutes ?? h.eta_minutes,
+              };
+            }
+            return h;
+          })
+        );
+      }
     },
     [coords.lat, coords.lon]
   );
@@ -522,9 +616,12 @@ export const SafeBridgeApp: React.FC = () => {
   const handleUploadAudio = async () => {
     if (!audioFile) return;
     try {
-      const text = await transcribeAudio(audioFile);
-      if (text) {
-        setSttText(text);
+      const result = await transcribeAudio(audioFile);
+      if (result && result.text) {
+        setSttText(String(result.text)); // 문자열로 확실히 변환
+        if (result.sbarSummary) {
+          setSbarText(result.sbarSummary);
+        }
         setVoiceMode(false);
         setAudioFile(null);
       } else {
@@ -568,9 +665,12 @@ export const SafeBridgeApp: React.FC = () => {
 
         // 녹음된 파일을 업로드
         try {
-          const text = await transcribeAudio(audioFile);
-          if (text) {
-            setSttText(text);
+          const result = await transcribeAudio(audioFile);
+          if (result && result.text) {
+            setSttText(String(result.text)); // 문자열로 확실히 변환
+            if (result.sbarSummary) {
+              setSbarText(result.sbarSummary);
+            }
             setVoiceMode(false);
           } else {
             alert("음성 인식 결과가 없습니다.");
@@ -849,6 +949,57 @@ export const SafeBridgeApp: React.FC = () => {
     setCurrentHospitalIndex((prev) => prev + 1);
   };
 
+  // Socket.IO 이벤트 리스너: 병원 승인/거절 실시간 알림
+  useEffect(() => {
+    const socket = getSocket();
+    
+    const handleHospitalApproved = async (data: {
+      request_id: number;
+      assignment_id: number;
+      hospital_id: string;
+      call_sid: string;
+    }) => {
+      console.log("📞 Socket.IO: 병원 승인 알림 수신:", data);
+      
+      // 해당 병원 찾기
+      const approvedHospital = hospitals.find((h) => h.hpid === data.hospital_id);
+      if (!approvedHospital) {
+        console.warn("승인된 병원을 목록에서 찾을 수 없습니다:", data.hospital_id);
+        return;
+      }
+      
+      // 자동 전화 즉시 중단
+      setTwilioAutoCalling(false);
+      setActiveCalls({});
+      
+      // 병원 승인 처리
+      await handleApproveHospital(approvedHospital);
+    };
+    
+    const handleHospitalRejected = (data: {
+      request_id: number;
+      assignment_id: number;
+      hospital_id: string;
+      call_sid: string;
+    }) => {
+      console.log("📞 Socket.IO: 병원 거절 알림 수신:", data);
+      
+      // 해당 병원 찾아서 거절 처리
+      const rejectedHospital = hospitals.find((h) => h.hpid === data.hospital_id);
+      if (rejectedHospital) {
+        handleRejectHospital(rejectedHospital);
+      }
+    };
+    
+    socket.on("hospital_approved", handleHospitalApproved);
+    socket.on("hospital_rejected", handleHospitalRejected);
+    
+    return () => {
+      socket.off("hospital_approved", handleHospitalApproved);
+      socket.off("hospital_rejected", handleHospitalRejected);
+    };
+  }, [hospitals]);
+
   const FALLBACK_TWILIO_NUMBER = "010-4932-3766";
   const buildPatientInfo = () => {
     const preset = CRITICAL_PRESETS.find((p) => p.label === symptom);
@@ -876,7 +1027,7 @@ export const SafeBridgeApp: React.FC = () => {
     try {
       setHospitalApprovalStatus((prev) => ({ ...prev, [hospital.hpid || ""]: "calling" }));
       const result = await makeCall(
-        FALLBACK_TWILIO_NUMBER,
+        FALLBACK_TWILIO_NUMBER, // 모든 전화는 테스트 번호로만 전송
         hospital.dutyName || "",
         buildPatientInfo() || sttText || null,
         undefined // ngrok URL은 선택사항
@@ -906,9 +1057,11 @@ export const SafeBridgeApp: React.FC = () => {
         if (callTimeoutsRef.current[timeoutKey]) {
           clearTimeout(callTimeoutsRef.current[timeoutKey]);
         }
+        // 전화 타임아웃: 60초 후에 거절 처리 (전화 연결 및 ARS 안내 시간 고려)
         callTimeoutsRef.current[timeoutKey] = setTimeout(() => {
+          console.log(`⏱️ 전화 타임아웃: ${hospital.dutyName} (${timeoutKey})`);
           completeCallAndMoveNext(hospital, "rejected");
-        }, 20000);
+        }, 60000); // 60초로 증가
       }
     } catch (error: any) {
       console.error("전화 연결 오류:", error);
@@ -944,14 +1097,19 @@ export const SafeBridgeApp: React.FC = () => {
       const decision = result?.digit === "1" ? "approved" : result?.digit === "2" ? "rejected" : null;
       const status = result?.status;
 
+      // 승인/거절 응답이 있으면 처리
       if (decision) {
         completeCallAndMoveNext(hospital, decision);
         return;
       }
 
-      if (status && ["busy", "failed", "no-answer", "canceled", "completed"].includes(status)) {
+      // 전화 상태가 실제 실패 상태일 때만 거절 처리
+      // "completed"는 통화 완료 상태일 뿐 거절이 아니므로 제외
+      // "ringing", "in-progress"는 통화 진행 중이므로 기다림
+      if (status && ["busy", "failed", "no-answer", "canceled"].includes(status)) {
         completeCallAndMoveNext(hospital, "rejected");
       }
+      // "completed" 상태는 다이얼 입력(digit) 확인 후 처리하므로 여기서는 무시
     } catch (e) {
       console.error("전화 응답 확인 실패:", e);
     }
@@ -969,27 +1127,35 @@ export const SafeBridgeApp: React.FC = () => {
     return () => clearInterval(interval);
   }, [hospitals, activeCalls, hospitalApprovalStatus]);
 
-  // [자동 전화 기능 - 필요시 주석 해제]
-  // 실제 Twilio 전화 기능은 테스트 완료. 테스트 환경에서는 수동 버튼 사용.
-  // useEffect(() => {
-  //   if (!twilioAutoCalling || approvedHospital || currentHospitalIndex >= hospitals.length) {
-  //     return;
-  //   }
-  //
-  //   const currentHospital = hospitals[currentHospitalIndex];
-  //   if (!currentHospital) return;
-  //
-  //   let timer: ReturnType<typeof setTimeout> | null = null;
-  //   if (!activeCalls[currentHospital.hpid || ""]) {
-  //     timer = setTimeout(() => {
-  //       handleStartTwilioCall(currentHospital);
-  //     }, 10000);
-  //   }
-  //   return () => {
-  //     if (timer) clearTimeout(timer);
-  //   };
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital, activeCalls]);
+  // 자동 전화 기능: 병원 승인 시 자동으로 다음 병원으로 전화
+  useEffect(() => {
+    if (!twilioAutoCalling || approvedHospital || currentHospitalIndex >= hospitals.length) {
+      return;
+    }
+
+    const currentHospital = hospitals[currentHospitalIndex];
+    if (!currentHospital) return;
+
+    // 이미 거절된 병원이면 스킵
+    if (rejectedHospitals.has(currentHospital.hpid || "")) {
+      return;
+    }
+
+    // 이미 전화 중이면 스킵
+    if (activeCalls[currentHospital.hpid || ""]) {
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    timer = setTimeout(() => {
+      handleStartTwilioCall(currentHospital);
+    }, 10000); // 10초 딜레이
+    
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [twilioAutoCalling, currentHospitalIndex, hospitals.length, approvedHospital, activeCalls, rejectedHospitals]);
 
   useEffect(() => {
     if (twilioAutoCalling && !hasCallableHospital) {
@@ -1143,9 +1309,6 @@ export const SafeBridgeApp: React.FC = () => {
             >
               로그아웃
             </button>
-            <div className="text-right text-[10px] md:text-[11px] text-slate-400 leading-snug">
-              <div>Mock UI · 실제 환자 이송에 사용 금지</div>
-            </div>
           </div>
         </div>
       </header>
@@ -1309,7 +1472,8 @@ export const SafeBridgeApp: React.FC = () => {
           onClose={() => setIsChatOpen(false)}
           onHandoverComplete={(sessionId) => {
             if (chatSession && chatSession.id === sessionId) {
-              setChatSession((prev) => (prev ? { ...prev, status: "COMPLETED" } : null));
+              // 인계완료 후 화면 초기화
+              handleResetAfterHandover();
             }
           }}
         />
@@ -1332,6 +1496,15 @@ export const SafeBridgeApp: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* 감사 인사 푸터 - 작고 절제된 디자인 */}
+      <footer className="border-t border-slate-200 bg-white mt-auto">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <p className="text-center text-[11px] text-slate-500 leading-relaxed">
+            오늘도 생명의 불씨가 꺼지지 않게 노력하는 당신의 노고에 감사합니다.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 };

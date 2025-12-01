@@ -42,7 +42,7 @@ export const STTInput: React.FC<STTInputProps> = ({
       <div className="flex gap-3 mb-3">
         {!isRecording ? (
           <button
-            className="px-6 py-3 rounded-lg bg-blue-600 text-white text-base font-semibold hover:bg-blue-700 transition shadow-md disabled:opacity-50 min-h-[48px]"
+            className="px-6 py-3 rounded-lg bg-slate-700 text-white text-base font-semibold hover:bg-slate-800 transition shadow-md disabled:opacity-50 min-h-[48px]"
             onClick={onStartRecording}
             disabled={!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia}
           >
@@ -96,7 +96,7 @@ export const STTInput: React.FC<STTInputProps> = ({
             />
             {audioFile && (
               <button
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-md"
+                className="px-4 py-2 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 transition shadow-md"
                 onClick={onUploadAudio}
               >
                 음성 파일 분석
@@ -106,15 +106,15 @@ export const STTInput: React.FC<STTInputProps> = ({
         </div>
       )}
       <textarea
-        className="w-full min-h-[120px] rounded-lg border-2 border-gray-300 px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        className="w-full min-h-[120px] rounded-lg border-2 border-slate-300 px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-slate-600 focus:border-slate-600"
         placeholder="구급대원이 확인한 환자 증상 요약을 입력하세요."
         value={sttText}
         onChange={(e) => setSttText(e.target.value)}
       />
       {sttText && (
-        <div className="mt-3 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg">
-          <p className="text-sm text-blue-900 font-semibold mb-1">음성 인식 결과:</p>
-          <p className="text-sm text-gray-800">{sttText}</p>
+        <div className="mt-3 p-4 bg-slate-50 border-2 border-slate-300 rounded-lg">
+          <p className="text-sm text-slate-900 font-semibold mb-1">음성 인식 결과:</p>
+          <p className="text-sm text-slate-800">{sttText}</p>
         </div>
       )}
     </section>
