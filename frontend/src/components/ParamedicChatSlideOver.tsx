@@ -69,7 +69,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     };
   }, []);
 
-  // DB에서 메시지 로드
+  // DB에서 메시지 로드 + WebSocket 연결
   useEffect(() => {
     if (!isOpen || !localSession.sessionId) {
       // sessionId가 없는 경우: 로컬 초기 메시지 표시 (한 번만)
@@ -128,6 +128,27 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
       };
     }
   }, [isOpen, localSession.sessionId, formatMessages, createInitialMessage, sttText]);
+
+  // 안전장치: WebSocket 이슈로 인해 새 메시지가 누락되는 경우를 대비해 주기적으로 메시지 동기화
+  useEffect(() => {
+    if (!isOpen || !localSession.sessionId) return;
+    const sessionId = localSession.sessionId;
+
+    const poll = async () => {
+      try {
+        const dbMessages = await getChatMessages(sessionId);
+        setMessages(formatMessages(dbMessages));
+      } catch (error) {
+        console.error("메시지 폴링 로드 실패:", error);
+      }
+    };
+
+    const interval = setInterval(() => {
+      void poll();
+    }, 3000); // 3초마다 동기화
+
+    return () => clearInterval(interval);
+  }, [isOpen, localSession.sessionId, formatMessages]);
 
   // sttText 변경 시 자동으로 메시지 전송 (중증 버튼 클릭 시 등)
   // 이전 sttText 값을 추적하여 실제로 변경되었을 때만 전송
@@ -409,6 +430,9 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     setLocalSession((prev) => ({ ...prev, status: "COMPLETED" }));
     onHandoverComplete(localSession.id);
     handleCloseConfirmModal();
+
+    // 환자 인계가 정상적으로 종료되면 전체 화면을 새로고침하여 상태를 초기화
+    window.location.reload();
   };
 
   if (!isOpen) return null;
@@ -523,8 +547,9 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                           return;
                         }
                         
-                        // Enter 키 입력 전의 현재 값을 가져옴
-                        const textToSend = draftText.trim();
+                        // ✅ 실제 textarea 요소의 현재 값을 직접 가져옴 (상태가 아닌 실제 값 사용)
+                        const textarea = e.currentTarget as HTMLTextAreaElement;
+                        const textToSend = textarea.value.trim();
                         const imageToSend = draftImage;
                         
                         // 전송할 내용이 없으면 무시
@@ -532,7 +557,8 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                           return;
                         }
                         
-                        // 입력 필드를 즉시 초기화 (e.preventDefault()로 Enter 키 입력을 막았으므로 확실히 초기화)
+                        // 입력 필드를 즉시 초기화 (DOM + state 동기화)
+                        textarea.value = "";
                         setDraftText("");
                         handleClearImage();
                         
@@ -567,13 +593,19 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
                   <span className="text-xs font-semibold text-slate-800">현재 위치 / 경로</span>
                   <span className="text-[10px] text-slate-500">구급차 기준</span>
                 </div>
-                {hospital ? (
-                  <KakaoAmbulanceMap coords={mapCoords} hospitals={[hospital]} routePath={mapRoutePaths[hospital.hpid || ""] || []} />
-                ) : (
-                  <div className="flex-1 bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
-                    <div>표시할 병원 정보가 없습니다.</div>
-                  </div>
-                )}
+                <div className="h-[260px]">
+                  {hospital ? (
+                    <KakaoAmbulanceMap
+                      coords={mapCoords}
+                      hospitals={[hospital]}
+                      routePath={mapRoutePaths[hospital.hpid || ""] || []}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
+                      <div>표시할 병원 정보가 없습니다.</div>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-800">
                 <div className="flex items-center justify-between mb-1">
@@ -657,7 +689,20 @@ const ParamedicMessageBubble: React.FC<ParamedicMessageBubbleProps> = ({ message
         {message.content && <p className="whitespace-pre-wrap leading-snug">{message.content}</p>}
         {message.imageUrl && (
           <div className="mt-2">
-            <img src={message.imageUrl} alt="구급대원 전송 이미지" className="rounded-xl border border-slate-200 w-full max-h-64 object-cover" />
+            <img 
+              src={message.imageUrl} 
+              alt="구급대원 전송 이미지" 
+              className="rounded-xl border border-slate-200 w-full max-h-64 object-cover"
+              onError={(e) => {
+                console.error("이미지 로드 실패:", message.imageUrl);
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'text-xs text-red-500 p-2 bg-red-50 rounded';
+                errorDiv.textContent = '이미지를 불러올 수 없습니다.';
+                target.parentElement?.appendChild(errorDiv);
+              }}
+            />
             {isParamedic && <p className="mt-1 text-[10px] opacity-70">실제 서비스에서는 의료정보 보호를 위해 암호화와 접근 권한 제어가 필요합니다.</p>}
           </div>
         )}

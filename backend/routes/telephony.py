@@ -55,6 +55,11 @@ def register_telephony_routes(app, twilio_client, call_responses, active_mock_ca
                 
                 try:
                     print(f"   ⏳ Twilio API 호출 중...")
+                    print(f"   발신 번호: {normalized_from}")
+                    print(f"   수신 번호: {normalized_to}")
+                    print(f"   병원명: {hospital_name}")
+                    print(f"   환자 정보: {patient_info[:100] if patient_info else '없음'}...")
+                    
                     call = twilio_client.calls.create(
                         to=normalized_to,
                         from_=normalized_from,
@@ -62,17 +67,20 @@ def register_telephony_routes(app, twilio_client, call_responses, active_mock_ca
                         method="POST",
                         status_callback=status_url,
                         status_callback_method="POST",
-                        status_callback_event=["initiated", "ringing", "answered", "completed"],
-                        record=False
+                        status_callback_event=["initiated", "ringing", "answered", "completed", "busy", "no-answer", "failed", "canceled"],
+                        record=False,
+                        timeout=60  # 60초 타임아웃
                     )
                     call_sid = call.sid
                     used_twilio = True
                     print(f"   ✅ Twilio 전화 발신 성공! Call SID: {call_sid}")
                     print(f"   📱 {normalized_to}로 전화가 발신되었습니다.")
+                    print(f"   📊 통화 상태: {call.status}")
                 except Exception as exc:
                     print(f"   ❌ Twilio 전화 연결 실패: {exc}")
                     import traceback
                     print(f"   상세 오류:\n{traceback.format_exc()}")
+                    print(f"   ⚠️  Mock Call로 처리합니다. 실제 전화가 발신되지 않습니다.")
             else:
                 # 콜백 URL이 없어도 전화를 발신 시도 (공개 URL이 필요하지만 일단 시도)
                 print(f"   ⚠️ Twilio 콜백 URL이 없습니다. 전화 발신을 시도합니다.")

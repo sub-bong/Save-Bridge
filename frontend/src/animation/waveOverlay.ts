@@ -17,7 +17,10 @@ export interface WaveOverlayOptions {
  */
 export const createWaveOverlay = (opts: WaveOverlayOptions) => {
   const { kakao } = window;
-  if (!kakao) return null;
+  if (!kakao || !kakao.maps) {
+    console.warn("createWaveOverlay: kakao.maps가 로드되지 않았습니다.");
+    return null;
+  }
 
   const color = opts.color ?? "rgba(235, 99, 33, 0.6)";
   const diameter = opts.diameter ?? 48;
@@ -49,10 +52,15 @@ export const createWaveOverlay = (opts: WaveOverlayOptions) => {
   el.style.animation = `kakao-ambulance-wave ${durationMs}ms ease-out infinite`;
   el.style.pointerEvents = "none";
 
-  const pos = new kakao.maps.LatLng(opts.position.lat, opts.position.lon);
-  return new kakao.maps.CustomOverlay({
-    position: pos,
-    content: el,
-    yAnchor: 0.5,
-  });
+  try {
+    const pos = new kakao.maps.LatLng(opts.position.lat, opts.position.lon);
+    return new kakao.maps.CustomOverlay({
+      position: pos,
+      content: el,
+      yAnchor: 0.5,
+    });
+  } catch (error) {
+    console.error("createWaveOverlay: 오류 발생:", error);
+    return null;
+  }
 };

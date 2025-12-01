@@ -31,7 +31,7 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
   const boundsFittedRef = useRef(false);
   const initialLevelRef = useRef<number>(5);
 
-  const overlay = createWaveOverlay({ position: { lat: coords.lat!, lon: coords.lon! } });
+  const overlayRef = useRef<any>(null);
 
   // SDK 로드
   useEffect(() => {
@@ -98,7 +98,14 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
       const ambImg = new kakao.maps.MarkerImage(ambulanceSvg, new kakao.maps.Size(36, 36), { offset: new window.kakao.maps.Point(18, 18) });
       ambRef.current = new kakao.maps.Marker({ position: center, image: ambImg });
       ambRef.current.setMap(mapRef.current);
-      overlay?.setMap(mapRef.current);
+      
+      // Wave overlay 생성 (kakao.maps가 로드된 후)
+      if (coords.lat && coords.lon) {
+        overlayRef.current = createWaveOverlay({ position: { lat: coords.lat, lon: coords.lon } });
+        if (overlayRef.current) {
+          overlayRef.current.setMap(mapRef.current);
+        }
+      }
 
       // 사용자 조작 시 추적 중단, 10초 후 재추적
       const markManual = () => {
@@ -168,9 +175,13 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     if (!ready || !mapRef.current || !ambRef.current) return;
     if (!coords.lat || !coords.lon) return;
     const pos = new window.kakao.maps.LatLng(coords.lat, coords.lon);
-    const wave = new window.kakao.maps.LatLng(coords.lat!, coords.lon!);
     ambRef.current.setPosition(pos);
-    overlay?.setPosition(wave);
+    
+    // Wave overlay 위치 업데이트
+    if (overlayRef.current && window.kakao?.maps) {
+      const wavePos = new window.kakao.maps.LatLng(coords.lat, coords.lon);
+      overlayRef.current.setPosition(wavePos);
+    }
 
     if (followAmbulance) {
       mapRef.current.setCenter(pos);
@@ -180,7 +191,7 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
   // API 키가 없으면 안내 메시지 표시
   if (!KAKAO_KEY) {
     return (
-      <div className="w-full h-[360px] rounded-xl border border-slate-200 shadow-sm flex items-center justify-center bg-slate-50">
+      <div className="w-full h-full rounded-xl border border-slate-200 shadow-sm flex items-center justify-center bg-slate-50">
         <div className="text-center text-sm text-slate-600">
           <p className="font-semibold mb-1">지도를 불러올 수 없습니다</p>
           <p className="text-xs">Kakao 지도 API 키가 설정되지 않았습니다.</p>
@@ -190,5 +201,6 @@ export const KakaoAmbulanceMap: React.FC<Props> = ({ coords, hospitals, routePat
     );
   }
   
-  return <div ref={containerRef} className="w-full h-[360px] rounded-xl border border-slate-200 shadow-sm" />;
+  // 부모 컨테이너의 높이에 맞게 지도를 채움
+  return <div ref={containerRef} className="w-full h-full rounded-xl border border-slate-200 shadow-sm" />;
 };

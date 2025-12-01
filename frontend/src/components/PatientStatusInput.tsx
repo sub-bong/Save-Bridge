@@ -121,7 +121,7 @@ export const PatientStatusInput: React.FC<PatientStatusInputProps> = ({
       } catch (error: any) {
         console.error("SBAR 변환 실패:", error);
         // 에러 발생 시 원본 텍스트 사용
-        setSbarText(sttText);
+    setSbarText(sttText);
       } finally {
         setIsConvertingSBAR(false);
       }

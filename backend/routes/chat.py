@@ -237,6 +237,80 @@ def register_chat_routes(app, socketio=None):
             print(f"ChatSession 목록 조회 오류: {error_detail}")
             return jsonify({"error": f"ChatSession 목록 조회 중 오류가 발생했습니다: {str(e)}"}), 500
 
+    @app.route('/api/chat/pending-session', methods=['GET'])
+    def api_get_pending_session_for_ems():
+        """특정 EMS 계정에 대해, 아직 인계 완료되지 않은 최신 ChatSession 조회"""
+        try:
+            ems_id = request.args.get('ems_id')
+            if not ems_id:
+                return jsonify({"error": "ems_id가 필요합니다."}), 400
+
+            # EMS 팀 조회
+            ems_team = EMSTeam.query.filter_by(ems_id=ems_id).first()
+            if not ems_team:
+                return jsonify({"session": None}), 200
+
+            # team_id 기준으로, 인계가 완료되지 않은(EmergencyRequest.is_completed != True) 세션 중
+            # 삭제되지 않은(ChatSession.is_deleted=False) 최신 세션 하나 조회
+            pending_session = (
+                ChatSession.query
+                .join(EmergencyRequest, ChatSession.request_id == EmergencyRequest.request_id)
+                .filter(
+                    EmergencyRequest.team_id == ems_team.team_id,
+                    (EmergencyRequest.is_completed.is_(False)) | (EmergencyRequest.is_completed.is_(None)),
+                    ChatSession.is_deleted.is_(False)
+                )
+                .order_by(ChatSession.started_at.desc())
+                .first()
+            )
+
+            if not pending_session:
+                return jsonify({"session": None}), 200
+
+            emergency_request = EmergencyRequest.query.get(pending_session.request_id)
+            assignment = RequestAssignment.query.get(pending_session.assignment_id)
+            hospital = None
+            if assignment and assignment.hospital_id:
+                hospital = Hospital.query.filter_by(hospital_id=assignment.hospital_id).first()
+
+            # 최신 메시지
+            latest_message = ChatMessage.query.filter_by(
+                session_id=pending_session.session_id
+            ).order_by(ChatMessage.sent_at.desc()).first()
+
+            session_payload = {
+                "session_id": pending_session.session_id,
+                "request_id": pending_session.request_id,
+                "assignment_id": pending_session.assignment_id,
+                "started_at": format_datetime_with_tz(pending_session.started_at),
+                "ended_at": format_datetime_with_tz(pending_session.ended_at),
+                "is_completed": emergency_request.is_completed if emergency_request else False,
+                "ems_id": ems_team.ems_id if ems_team else None,
+                "hospital_id": assignment.hospital_id if assignment else None,
+                "hospital_name": hospital.name if hospital else None,
+                "hospital_lat": hospital.latitude if hospital else None,
+                "hospital_lon": hospital.longitude if hospital else None,
+                "patient_age": emergency_request.patient_age if emergency_request else None,
+                "patient_sex": emergency_request.patient_sex if emergency_request else None,
+                "pre_ktas_class": emergency_request.pre_ktas_class if emergency_request else None,
+                "rag_summary": emergency_request.rag_summary if emergency_request else None,
+                "stt_full_text": emergency_request.stt_full_text if emergency_request else None,
+                "current_lat": emergency_request.current_lat if emergency_request else None,
+                "current_lon": emergency_request.current_lon if emergency_request else None,
+                "latest_message": {
+                    "content": latest_message.content if latest_message else None,
+                    "sent_at": format_datetime_with_tz(latest_message.sent_at) if latest_message else None,
+                    "sender_type": latest_message.sender_type if latest_message else None,
+                } if latest_message else None,
+            }
+
+            return jsonify({"session": session_payload}), 200
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"EMS 미완료 세션 조회 오류: {error_detail}")
+            return jsonify({"error": f"미완료 세션 조회 중 오류가 발생했습니다: {str(e)}"}), 500
+
     @app.route('/api/chat/session/<int:session_id>/complete', methods=['POST', 'OPTIONS'])
     def api_complete_chat_session(session_id):
         """ChatSession 인계 완료 처리 (ended_at 설정)"""

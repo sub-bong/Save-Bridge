@@ -47,6 +47,14 @@ Thumbs.db
 .flask_pid
 .react_pid
 stt_history.txt
+uploads/
+backend/uploads/
+frontend/uploads/
+__uploads__/
+
+# Twilio / secrets scripts local overrides
+scripts/*.local.*
+scripts/*_secret*.py
 
 # Database
 *.db
@@ -58,4 +66,18 @@ site.db
 # Temporary files
 *.tmp
 *.temp
+
+# mkcert SSL certificates
+*.pem
+*-key.pem
+localhost*.pem
+
+# Vite / frontend build artifacts
+frontend/dist/
+frontend/.vite/
+
+# Coverage / test artifacts
+.coverage
+coverage/
+htmlcov/
 
