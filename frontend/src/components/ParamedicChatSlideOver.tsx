@@ -43,6 +43,7 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false); // 메시지 전송 중 플래그
   const initialMessageSentRef = useRef<boolean>(false);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setLocalSession(session);
@@ -240,6 +241,12 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
     
     return () => clearTimeout(timeoutId);
   }, [isOpen, localSession.sessionId, sttText, sendSttMessageToChat]);
+
+  // 새 메시지가 추가될 때마다 스크롤을 항상 맨 아래로 이동
+  useEffect(() => {
+    if (!isOpen) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isOpen]);
   // 세션이 변경되면 초기 메시지 전송 플래그 리셋
   useEffect(() => {
     if (localSession.sessionId) {
@@ -456,33 +463,38 @@ export const ParamedicChatSlideOver: React.FC<ParamedicChatSlideOverProps> = ({
           </button>
         </header>
 
-        {/* 상태 / 병원 정보 */}
-        <div className="px-4 py-3 border-b border-slate-200 bg-white flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-slate-900">{localSession.hospitalName} 응급실과의 인계 채팅</span>
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700">{statusLabel}</span>
-            </div>
-            <div className="mt-1 text-xs text-slate-500">병원 분류: {localSession.regionLabel}</div>
-          </div>
-          <button
-            type="button"
-            onClick={handleOpenConfirmModal}
-            disabled={localSession.status === "COMPLETED"}
-            className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            인계 처리
-          </button>
-        </div>
-
         {/* 채팅 + 메타 2-분할 */}
         <div className="flex flex-1 min-h-0">
           {/* 채팅 영역 */}
           <section className="flex-[3] flex flex-col min-w-[360px] border-r border-slate-200">
+            {/* 응급실 화면과 동일한 위치에 인계 상태 / 병원 정보 요약 표시 */}
+            <div className="px-4 py-2 border-b border-slate-200 bg-white flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-900">
+                    {localSession.hospitalName} 응급실과의 인계 채팅
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700">
+                    {statusLabel}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">병원 분류: {localSession.regionLabel}</div>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenConfirmModal}
+                disabled={localSession.status === "COMPLETED"}
+                className="px-4 py-2 rounded-full text-xs font-semibold border border-emerald-600 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                인계 처리
+              </button>
+            </div>
+
             <div className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
               {messages.map((m) => (
                 <ParamedicMessageBubble key={m.id} message={m} />
               ))}
+              <div ref={messagesEndRef} />
             </div>
             <div className="border-t border-slate-200 bg-white px-4 py-3">
               {draftImage && (

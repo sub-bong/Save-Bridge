@@ -698,20 +698,6 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                           {statusLabel}
                         </span>
                       </div>
-                      {/* X 버튼 - 목록의 가장 오른쪽 끝에 위치 */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteClick(session.session_id, e);
-                        }}
-                        disabled={deletingSessionId === session.session_id}
-                        className="absolute top-2 right-2 text-slate-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed z-10"
-                        title="세션 삭제"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
                       {/* 중간: 주증상 */}
                       <div className="text-[11px] text-slate-600 truncate">
                         주증상: {chiefComplaint}
