@@ -15,7 +15,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["vite/client"] // 11/29 추가: vite -> import.meta.env로 .env 파일 접근을 위한 추가 옵션 설정(.env변수 중 VITE_ 접두사가 붙은 변수만 로드)
+    "types": ["vite/client", "node"] // vite.config.ts에서 Node.js 모듈 사용을 위해 추가
   },
   "include": ["src", "vite-env.d.ts"] // 11/29 추가: vite -> import.meta.env로 .env 파일 접근을 위한 추가 옵션 설정(.env변수 중 VITE_ 접두사가 붙은 변수만 로드)
 }

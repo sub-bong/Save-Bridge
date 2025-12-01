@@ -4,9 +4,28 @@ import type { Coords, Region, Hospital } from "../types";
 // API 기본 URL (환경 변수 또는 기본값)
 const getApiBaseUrl = (): string => {
   try {
-    // Vite 환경 변수 접근
     const env = (import.meta as { env?: { VITE_API_BASE_URL?: string } }).env;
-    return env?.VITE_API_BASE_URL || "http://localhost:5001";
+    if (env?.VITE_API_BASE_URL) {
+      return env.VITE_API_BASE_URL;
+    }
+    
+    // 환경변수가 없으면 현재 호스트 기반으로 동적 결정
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    
+    // HTTPS로 접속한 경우 (localhost, IP, .local 모두)
+    // Mixed Content 문제 방지를 위해 프록시 사용 (Vite 프록시가 HTTP 백엔드로 전달)
+    if (protocol === 'https:') {
+      return ''; // 상대 경로 사용 (Vite 프록시가 처리)
+    }
+    
+    // HTTP로 접속한 경우
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:5001';
+    } else {
+      // 로컬 네트워크 IP나 .local 도메인으로 접속한 경우
+      return `http://${hostname}:5001`;
+    }
   } catch {
     return "http://localhost:5001";
   }
@@ -26,10 +45,20 @@ export const getImageUrl = (imagePathOrUrl: string | null | undefined): string |
     return imagePathOrUrl;
   }
   
-  // 상대 경로인 경우 전체 URL로 변환
-  const baseUrl = API_BASE_URL.replace(/\/$/, ''); // 끝의 슬래시 제거
+  // 상대 경로인 경우 처리
+  // HTTPS 환경에서는 프록시를 통해 접근 (상대 경로 사용)
+  // HTTP 환경에서는 API_BASE_URL 사용
+  const protocol = window.location.protocol;
   const imagePath = imagePathOrUrl.startsWith('/') ? imagePathOrUrl : `/${imagePathOrUrl}`;
-  return `${baseUrl}${imagePath}`;
+  
+  if (protocol === 'https:') {
+    // HTTPS 환경: 프록시를 통해 접근 (상대 경로 사용)
+    return imagePath;
+  } else {
+    // HTTP 환경: API_BASE_URL 사용
+    const baseUrl = API_BASE_URL.replace(/\/$/, ''); // 끝의 슬래시 제거
+    return `${baseUrl}${imagePath}`;
+  }
 };
 
 // 주소 → 좌표 변환
@@ -241,6 +270,39 @@ export const getCallResponse = async (callSid: string): Promise<{ digit?: string
     return res.data || null;
   } catch (error: any) {
     console.error("전화 응답 확인 실패:", error);
+    return null;
+  }
+};
+
+// EMS 계정별, 미완료 ChatSession 조회
+export const getPendingChatSessionForEms = async (
+  emsId: string
+): Promise<{
+  session_id: number;
+  request_id: number;
+  assignment_id: number;
+  is_completed: boolean;
+  ems_id: string | null;
+  hospital_id: string | null;
+  hospital_name: string | null;
+  hospital_lat: number | null;
+  hospital_lon: number | null;
+  patient_age: number | null;
+  patient_sex: string | null;
+  pre_ktas_class: string | null;
+  rag_summary: string | null;
+  stt_full_text: string | null;
+  current_lat: number | null;
+  current_lon: number | null;
+} | null> => {
+  try {
+    const res = await axios.get(`${API_BASE_URL}/api/chat/pending-session`, {
+      params: { ems_id: emsId },
+      withCredentials: true,
+    });
+    return res.data?.session || null;
+  } catch (error: any) {
+    console.error("미완료 채팅 세션 조회 실패:", error);
     return null;
   }
 };

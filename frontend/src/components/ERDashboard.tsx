@@ -63,6 +63,10 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   const [showLogoutModal, setShowLogoutModal] = useState(false); // 로그아웃 모달 표시 여부
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [routePaths, setRoutePaths] = useState<Record<string, number[][]>>({}); // 경로 정보
+  const [distanceKm, setDistanceKm] = useState<number | undefined>(undefined); // 거리 (km)
+  const [etaMinutes, setEtaMinutes] = useState<number | undefined>(undefined); // 예상 도착 시간 (분)
+  // IME(한글) 입력 후 Enter 전송 시 마지막 글자가 남는 문제를 막기 위한 플래그
+  const ignoreNextChangeRef = useRef(false);
   
   // 구급대원 위치와 병원 위치 기반으로 지도 표시용 데이터 생성
   const mapData = useMemo(() => {
@@ -89,6 +93,8 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   useEffect(() => {
     if (!mapData || !mapData.hospital || !mapData.ambulanceCoords.lat || !mapData.ambulanceCoords.lon) {
       setRoutePaths({});
+      setDistanceKm(undefined);
+      setEtaMinutes(undefined);
       return;
     }
     
@@ -104,9 +110,19 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
         if (result?.path_coords && mapData.hospital.hpid) {
           setRoutePaths({ [mapData.hospital.hpid]: result.path_coords });
         }
+        
+        // 거리와 ETA 정보 저장
+        if (result?.distance_km !== undefined) {
+          setDistanceKm(result.distance_km);
+        }
+        if (result?.eta_minutes !== undefined) {
+          setEtaMinutes(result.eta_minutes);
+        }
       } catch (error) {
         console.error("경로 정보 가져오기 실패:", error);
         setRoutePaths({});
+        setDistanceKm(undefined);
+        setEtaMinutes(undefined);
       }
     };
     
@@ -177,27 +193,27 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
       console.log("ERDashboard: 세션 목록 로드 완료, 세션 수:", data.length, data);
       setSessions(data);
       
-      // 항상 가장 최신 진행 중인 세션을 자동 선택
-      if (data.length > 0) {
+      // 사용자가 수동으로 선택한 세션이 있으면 그 세션을 유지하고 정보만 업데이트
+      if (selectedSession) {
+        const updatedSession = data.find(s => s.session_id === selectedSession.session_id);
+        if (updatedSession) {
+          // 선택된 세션이 목록에 있으면 정보만 업데이트 (포커스 유지)
+          setSelectedSession(updatedSession);
+          return;
+        }
+        // 선택된 세션이 목록에서 사라졌으면 선택 해제
+        setSelectedSession(null);
+      }
+      
+      // 선택된 세션이 없을 때만 자동으로 가장 최신 진행 중인 세션 선택
+      if (!selectedSession && data.length > 0) {
         const ongoingSessions = data.filter(s => !s.is_completed);
         if (ongoingSessions.length > 0) {
           // 가장 최신 진행 중인 세션 선택 (백엔드에서 최신순으로 정렬됨)
-          const latestSession = ongoingSessions[0];
-          // 선택된 세션이 변경되었거나 없으면 새로 선택
-          if (!selectedSession || selectedSession.session_id !== latestSession.session_id) {
-            setSelectedSession(latestSession);
-          } else {
-            // 같은 세션이면 업데이트만
-            setSelectedSession(latestSession);
-          }
+          setSelectedSession(ongoingSessions[0]);
         } else if (data.length > 0) {
           // 진행 중인 세션이 없으면 가장 최신 세션 선택
-          const latestSession = data[0];
-          if (!selectedSession || selectedSession.session_id !== latestSession.session_id) {
-            setSelectedSession(latestSession);
-          } else {
-            setSelectedSession(latestSession);
-          }
+          setSelectedSession(data[0]);
         }
       }
     } catch (error) {
@@ -276,7 +292,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
   useEffect(() => {
     if (!isLoggedIn || !hospitalId) return;
     
-    console.log("ERDashboard: 초기 로드, hospitalId:", hospitalId);
+    console.log("ERDashboard: 초기 로드 또는 선택 세션 변경, hospitalId:", hospitalId);
     loadSessions();
     // 주기적 새로고침 (5초마다 - 인계 완료 상태 빠른 반영)
     const interval = setInterval(() => {
@@ -284,7 +300,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
       loadSessions();
     }, 5000);
     return () => clearInterval(interval);
-  }, [hospitalId, isLoggedIn]);
+  }, [hospitalId, isLoggedIn, selectedSession?.session_id]);
 
   // 선택된 세션 변경 시 메시지 로드 및 WebSocket 연결
   useEffect(() => {
@@ -475,6 +491,26 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
     return "-";
   };
 
+  // 환자 정보를 "구급대원 식별번호 / 성별 / 나이" 형식으로 반환
+  const getPatientInfoLabel = (session: ChatSession): string => {
+    const emsId = session.ems_id || "알 수 없음";
+    // 🔹 연령 정보는 STT 원문 또는 요약(rag_summary)에서만 추출
+    //    (DB 기본값 30세 등에 영향받지 않도록 함)
+    const ageSourceText = (session.stt_full_text || session.rag_summary || "") as string;
+    const age = extractPatientAgeDisplay(ageSourceText);
+    const sex = getSexLabel(session.patient_sex);
+    
+    const parts: string[] = [emsId];
+    if (sex !== "-") {
+      parts.push(sex);
+    }
+    if (age) {
+      parts.push(age);
+    }
+    
+    return parts.join(" / ");
+  };
+
   const formatTime = (timeStr: string | null) => {
     if (!timeStr) return "";
     const date = new Date(timeStr);
@@ -572,7 +608,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
 
   return (
     <div className="h-screen w-full bg-slate-100 flex">
-      <div className="flex flex-col flex-1 max-w-6xl mx-auto my-4 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+      <div className="flex flex-col flex-1 w-full bg-white overflow-hidden">
         {/* 상단 헤더 */}
         <header className="h-12 flex items-center justify-between px-4 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2">
@@ -604,8 +640,8 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
         </header>
 
         <div className="flex flex-1 min-h-0 divide-x divide-slate-200">
-          {/* 왼쪽: 인계 채팅 목록 */}
-          <aside className="w-64 flex flex-col bg-slate-50 min-h-0">
+          {/* 왼쪽: 인계 채팅 목록 - 고정 폭 (너비 줄이기) */}
+          <aside className="w-56 flex-shrink-0 flex flex-col bg-slate-50 min-h-0">
             <div className="px-3 py-2 border-b border-slate-200 flex-shrink-0">
               <div className="text-xs font-semibold text-slate-700 mb-1">
                 인계 채팅 목록
@@ -650,8 +686,7 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                       {/* 상단: 구급대원/환자 정보 + 상태 배지 */}
                       <div className="flex items-center justify-between mb-0.5 pr-8">
                         <div className="text-xs font-semibold text-slate-900 flex-1 min-w-0">
-                          {session.ems_id || "알 수 없음"} · {extractPatientAgeDisplay(session.stt_full_text) || (session.patient_age ? `${session.patient_age}세` : "")}{" "}
-                          {getSexLabel(session.patient_sex)}
+                          {getPatientInfoLabel(session)}
                         </div>
                         <span
                           className={`rounded-full px-2 py-0.5 text-[10px] border flex-shrink-0 ${
@@ -663,20 +698,6 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                           {statusLabel}
                         </span>
                       </div>
-                      {/* X 버튼 - 목록의 가장 오른쪽 끝에 위치 */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteClick(session.session_id, e);
-                        }}
-                        disabled={deletingSessionId === session.session_id}
-                        className="absolute top-2 right-2 text-slate-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed z-10"
-                        title="세션 삭제"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
                       {/* 중간: 주증상 */}
                       <div className="text-[11px] text-slate-600 truncate">
                         주증상: {chiefComplaint}
@@ -695,19 +716,18 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
             </div>
           </aside>
 
-          {/* 중간: 채팅 패널 */}
-          <section className="flex-1 flex flex-col min-w-[420px]">
+          {/* 중간: 채팅 패널 (비율 2) */}
+          <section className="flex-[2] flex flex-col min-w-[420px]">
             {selectedSession ? (
               <>
                 <div className="px-4 py-2 border-b border-slate-200 bg-white">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-xs font-semibold text-slate-900">
-                        구급대원 {selectedSession.ems_id || "알 수 없음"}와의 인계 채팅
+                        {getPatientInfoLabel(selectedSession)}
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-500">
-                        {extractPatientAgeDisplay(selectedSession.stt_full_text) || (selectedSession.patient_age ? `${selectedSession.patient_age}세` : "")}{" "}
-                        {getSexLabel(selectedSession.patient_sex)} · 주증상: {selectedSession.rag_summary || "정보 없음"}
+                        주증상: {selectedSession.rag_summary || "정보 없음"}
                       </div>
                     </div>
                     <button
@@ -746,11 +766,19 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                         placeholder="구급대원에게 전달할 지시사항이나 질문을 입력하세요. (사진 전송은 구급대원 단말에서만 가능)"
                         value={draftText}
                         onChange={(e) => {
+                          // 직전에 Enter로 전송하면서 입력을 비운 경우,
+                          // IME(compositionend)에서 들어오는 마지막 글자 변경 이벤트는 무시
+                          if (ignoreNextChangeRef.current) {
+                            ignoreNextChangeRef.current = false;
+                            setDraftText("");
+                            // DOM value도 비워서 한 글자 남는 현상 완전히 제거
+                            e.target.value = "";
+                            return;
+                          }
+
                           // Enter 키로 인한 줄바꿈 제거 (Shift+Enter는 허용하지만, 일반 Enter는 제거)
                           let value = e.target.value;
-                          // 줄바꿈이 있고, 마지막 문자가 줄바꿈이면 제거 (Enter 키 입력 방지)
-                          if (value.includes('\n') && value.endsWith('\n')) {
-                            // 마지막 줄바꿈 제거
+                          if (value.includes("\n") && value.endsWith("\n")) {
                             value = value.slice(0, -1);
                           }
                           setDraftText(value);
@@ -766,16 +794,20 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                               return;
                             }
                             
-                            // Enter 키 입력 전의 현재 값을 가져옴
-                            const textToSend = draftText.trim();
+                            // ✅ 실제 textarea 요소의 현재 값을 직접 가져옴 (상태가 아닌 실제 값 사용)
+                            const textarea = e.currentTarget as HTMLTextAreaElement;
+                            const textToSend = textarea.value.trim();
                             
                             // 전송할 내용이 없으면 무시
                             if (!textToSend) {
                               return;
                             }
                             
-                            // 입력 필드를 즉시 초기화 (e.preventDefault()로 Enter 키 입력을 막았으므로 확실히 초기화)
+                            // 입력 필드를 즉시 초기화 (DOM + state 동기화)
+                            textarea.value = "";
                             setDraftText("");
+                            // 다음 onChange(IME compositionend 등)에서 들어오는 값은 무시
+                            ignoreNextChangeRef.current = true;
                             
                             // 즉시 전송 (textOverride로 전달하여 중복 방지)
                             handleSendMessage(textToSend);
@@ -784,8 +816,21 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
                       />
                       <button
                         type="button"
-                        onClick={() => handleSendMessage()}
-                        disabled={!draftText.trim() || isSendingMessage}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // 버튼 클릭 시에도 textarea 내용을 직접 읽어서 전송 후 완전히 비움
+                          const container = (e.currentTarget.closest("div") as HTMLDivElement) || null;
+                          const textarea = container?.querySelector("textarea") as HTMLTextAreaElement | null;
+                          const value = textarea ? textarea.value.trim() : draftText.trim();
+                          if (!value || isSendingMessage) return;
+                          if (textarea) {
+                            textarea.value = "";
+                          }
+                          setDraftText("");
+                          handleSendMessage(value);
+                        }}
+                        disabled={isSendingMessage}
                         className="px-4 py-2 rounded-full text-sm font-semibold shadow-sm border border-slate-300 bg-slate-900 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
                       >
                         {isSendingMessage ? "전송 중..." : "전송"}
@@ -801,80 +846,92 @@ export const ERDashboard: React.FC<ERDashboardProps> = ({
             )}
           </section>
 
-          {/* 오른쪽: 구급대원 위치/도착 예상 */}
-          <aside className="w-80 flex flex-col bg-slate-50">
+          {/* 오른쪽: 환자 / 이송 정보 요약 (비율 1) */}
+          <aside className="flex-[1] min-w-[320px] flex flex-col bg-slate-50">
             {selectedSession ? (
               <>
                 <div className="px-3 py-2 border-b border-slate-200 bg-slate-50">
-                  <div className="text-xs font-semibold text-slate-700 mb-1">
-                    구급대원 위치 / 도착 예상
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    채팅방 기준 · 구급대원 {selectedSession.ems_id || "알 수 없음"}
-                  </div>
+                  <div className="text-xs font-semibold text-slate-700 mb-1">환자 / 이송 정보 요약</div>
+                  <div className="text-xs text-slate-500">병원 기준 · {selectedSession.hospital_name || hospitalName}</div>
                 </div>
-                <div className="p-3 flex-1 flex flex-col gap-3">
-                  {/* 1. 구급차 이동 경로 약도 이미지 */}
-                  <div className="flex-1 rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col text-[11px] text-slate-700">
-                    <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-800">
-                        구급차 이동 경로 (약도)
-                      </span>
-                      <span className="text-[10px] text-slate-500">이미지</span>
+                <div className="p-3 flex-1 flex flex-col gap-3 overflow-y-auto">
+                  {/* 1. 현재 위치 / 경로 */}
+                  <div className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col flex-1 min-h-0">
+                    <div className="px-3 py-2 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+                      <span className="text-xs font-semibold text-slate-800">현재 위치 / 경로</span>
+                      <span className="text-[10px] text-slate-500">구급차 기준</span>
                     </div>
-                    <div className="flex-1 bg-slate-50 px-3 py-3 flex flex-col gap-2">
+                    <div className="flex-1 min-h-0">
                       {mapData && mapData.hospital && mapData.ambulanceCoords.lat && mapData.ambulanceCoords.lon ? (
-                        <div className="rounded-lg overflow-hidden border border-slate-200 bg-white" style={{ height: '300px' }}>
+                        <div className="w-full h-full">
                           <KakaoAmbulanceMap
                             coords={mapData.ambulanceCoords}
                             hospitals={[mapData.hospital]}
-                            routePath={mapData.hospital.hpid ? (routePaths[mapData.hospital.hpid] || []) : []}
+                            routePath={
+                              mapData.hospital.hpid ? routePaths[mapData.hospital.hpid] || [] : []
+                            }
                           />
                         </div>
                       ) : (
-                        <div className="rounded-lg overflow-hidden border border-slate-200 bg-white">
-                          <div className="h-48 bg-slate-100 flex items-center justify-center text-xs text-slate-500">
-                            위치 정보가 없습니다.
-                            <br />
-                            구급대원 위치 정보를 기다리는 중...
-                          </div>
+                        <div className="h-full bg-slate-100 flex flex-col items-center justify-center text-xs text-slate-500 gap-1 p-4">
+                          <div>표시할 병원 정보가 없습니다.</div>
+                          {selectedSession &&
+                            (!selectedSession.current_lat || !selectedSession.current_lon) && (
+                              <div className="text-[10px] mt-2">구급대원 위치 정보가 없습니다.</div>
+                            )}
                         </div>
                       )}
-                      <p className="text-[10px] text-slate-500">
-                        구급차의 현재 위치와 병원까지의 이동 경로를 표시합니다.
-                      </p>
                     </div>
                   </div>
 
-                  {/* 2. ETA 카드 - 예상 도착 시간 */}
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800">
+                  {/* 2. 예상 도착 시간 */}
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-800">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-semibold">예상 도착 시간</span>
-                      <span className="text-[11px] text-slate-500">
+                      <span className="text-xs text-slate-500">
                         {new Date().toLocaleTimeString("ko-KR", {
                           hour: "2-digit",
                           minute: "2-digit",
                           hour12: false,
                           timeZone: "Asia/Seoul",
-                        })} 기준
+                        })}
                       </span>
                     </div>
                     <div className="flex items-baseline gap-2">
-                      <span className="text-2xl font-semibold text-slate-900">-</span>
-                      <span className="text-[11px] text-slate-600">분 후 도착 예상</span>
+                      <span className="text-2xl font-semibold text-slate-900">{etaMinutes !== undefined ? etaMinutes : "-"}</span>
+                      <span className="text-xs text-slate-600">분 후 도착 예상</span>
                     </div>
-                    <div className="mt-1 text-[11px] text-slate-600">
-                      남은 거리 약 - km
-                    </div>
+                    <div className="mt-1 text-xs text-slate-600">남은 거리 약 {distanceKm !== undefined ? distanceKm.toFixed(1) : "-"} km</div>
+                    <div className="mt-2 text-xs text-slate-600">이 화면에서는 이송 중 환자의 남은 거리와 예상 도착 시간을 한눈에 볼 수 있도록 간단한 요약 정보만 표시합니다.</div>
                   </div>
 
-                  {/* 3. 인계 체크 포인트 */}
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700">
-                    <div className="font-semibold mb-1">인계 체크 포인트</div>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      <li>Pre-KTAS/KTAS 등급 확인</li>
-                      <li>혈압/맥박/호흡/산소포화도 최신 수치 반영 여부</li>
-                      <li>필요 시 도착 전 추가 검사 또는 처치 지시</li>
+                  {/* 3. 환자 정보 / 인계 체크 포인트 */}
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700">
+                    <div className="font-semibold mb-2">환자 정보 / 인계 체크 포인트</div>
+                    <div className="mb-2 text-slate-700">
+                      {selectedSession.patient_age && selectedSession.patient_sex ? (
+                        <>
+                          현재 이송 중인 환자: {selectedSession.patient_age}세 {getSexLabel(selectedSession.patient_sex)} · Pre-KTAS {selectedSession.pre_ktas_class || "-"}점.
+                        </>
+                      ) : (
+                        "환자 정보가 입력되지 않았습니다."
+                      )}
+                    </div>
+                    {selectedSession.rag_summary && (
+                      <div className="mb-2 text-slate-700">
+                        <span className="font-semibold">주요 증상:</span> {selectedSession.rag_summary}
+                      </div>
+                    )}
+                    {selectedSession.stt_full_text && (
+                      <div className="mb-2 text-slate-700">
+                        <span className="font-semibold">생체 징후:</span> {selectedSession.stt_full_text}
+                      </div>
+                    )}
+                    <ul className="list-disc list-inside space-y-1 text-xs">
+                      <li>환자 기본 정보(이름, 나이, 성별, 등록번호) 최종 확인</li>
+                      <li>Pre-KTAS 또는 KTAS 등급과 분류 사유 재확인</li>
+                      <li>증상 시작 시각과 최근 악화 시점이 기록되어 있는지 확인</li>
+                      <li>투여한 약물과 시행한 처치, 알레르기 및 항응고제 복용 여부 공유 여부 확인</li>
                     </ul>
                   </div>
                 </div>
@@ -984,9 +1041,18 @@ const ERMessageBubble: React.FC<ERMessageBubbleProps> = ({ message }) => {
               src={message.imageUrl}
               alt="구급대원 전송 이미지"
               className="rounded-xl border border-slate-200 w-full max-h-64 object-cover"
+              onError={(e) => {
+                console.error("이미지 로드 실패:", message.imageUrl);
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'text-xs text-red-500 p-2 bg-red-50 rounded';
+                errorDiv.textContent = '이미지를 불러올 수 없습니다.';
+                target.parentElement?.appendChild(errorDiv);
+              }}
             />
             <p className="mt-1 text-[10px] opacity-70">
-              실제 서비스에서는 의료정보 보호를 위해 암호화된 채널 및 접근 권한 제어 필요
+              실제 서비스에서는 의료정보 보호를 위해 암호화와 접근 권한 제어가 필요합니다.
             </p>
           </div>
         )}

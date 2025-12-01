@@ -16,6 +16,7 @@ import {
   createEmergencyRequest,
   callHospital,
   updateResponseStatus,
+  getPendingChatSessionForEms,
 } from "../services/api";
 import { detectPatientAgeGroup, extractPatientAge, extractPatientSex, extractPreKtasLevel } from "../utils/hospitalUtils";
 import { LocationInput } from "./LocationInput";
@@ -81,8 +82,20 @@ export const SafeBridgeApp: React.FC = () => {
   const levelAnimationRef = useRef<number | null>(null);
   const callTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const colorMapRef = useRef<Record<string, string>>({});
-
   const [liveCoords, setLiveCoords] = useState<Coords>({ lat: null, lon: null }); // 11/29 추가: 실시간 좌표 상태 관리
+
+  // EMS 계정 기준, 인계 완료되지 않은 마지막 채팅 세션
+  const [pendingChatSession, setPendingChatSession] = useState<{
+    session_id: number;
+    request_id: number;
+    assignment_id: number;
+    hospital: Hospital | null;
+    patient_age?: number | null;
+    patient_sex?: "M" | "F" | null;
+    pre_ktas_class?: number | string | null;
+    rag_summary?: string | null;
+    stt_full_text?: string | null;
+  } | null>(null);
 
   // 사용자 정보 로드
   useEffect(() => {
@@ -90,10 +103,48 @@ export const SafeBridgeApp: React.FC = () => {
       try {
         const user = await getCurrentUser();
         setCurrentUser(user);
+
+        // EMS 계정인 경우, 미완료 채팅 세션 조회
+        if (user && user.user_type === "EMS" && user.ems_id) {
+          try {
+            const pending = await getPendingChatSessionForEms(user.ems_id);
+            if (pending && !pending.is_completed) {
+              const hospital: Hospital | null = pending.hospital_id
+                ? {
+                    hpid: pending.hospital_id || undefined,
+                    dutyName: pending.hospital_name || undefined,
+                    wgs84Lat: pending.hospital_lat || undefined,
+                    wgs84Lon: pending.hospital_lon || undefined,
+                  }
+                : null;
+              setPendingChatSession({
+                session_id: pending.session_id,
+                request_id: pending.request_id,
+                assignment_id: pending.assignment_id,
+                hospital,
+                patient_age: pending.patient_age ?? null,
+                patient_sex: (pending.patient_sex === "M" || pending.patient_sex === "F"
+                  ? pending.patient_sex
+                  : null),
+                pre_ktas_class: pending.pre_ktas_class ?? null,
+                rag_summary: pending.rag_summary ?? null,
+                stt_full_text: pending.stt_full_text ?? null,
+              });
+            } else {
+              setPendingChatSession(null);
+            }
+          } catch (e) {
+            console.error("미완료 채팅 세션 조회 중 오류:", e);
+            setPendingChatSession(null);
+          }
+        } else {
+          setPendingChatSession(null);
+        }
       } catch (error) {
         console.error("사용자 정보 로드 실패:", error);
         // 에러가 발생해도 컴포넌트는 계속 렌더링되도록 함
         setCurrentUser(null);
+        setPendingChatSession(null);
       }
     };
     loadUser();
@@ -136,13 +187,13 @@ export const SafeBridgeApp: React.FC = () => {
       "정형외과 중증(대형골절/절단)",
       "신경외과 응급(의식저하/외상성출혈)",
     ];
-
+    
     // 성인 전용 증상
     const adultOnlySymptoms = ["성인 호흡곤란", "성인 경련"];
-
+    
     // 소아 전용 증상
     const pediatricOnlySymptoms = ["소아 호흡곤란", "소아 경련", "소아 중증(신생아/영아)"];
-
+    
     if (patientAgeGroup === "adult") {
       // 성인인 경우: 공통 증상 + 성인 전용 증상
       return [...commonSymptoms, ...adultOnlySymptoms];
@@ -220,9 +271,9 @@ export const SafeBridgeApp: React.FC = () => {
       alert("브라우저가 위치 정보를 지원하지 않습니다.");
       return;
     }
-
+    
     setLoadingGps(true);
-
+    
     try {
       const position = await fetchCoordsWithFallback(); // 11/29 수정: fetchCoordsWithFallback(coords, liveCoords 상태 동시 관리) 헬퍼 함수로 관리
       const { latitude, longitude } = position.coords;
@@ -230,11 +281,11 @@ export const SafeBridgeApp: React.FC = () => {
       const next = { lat: latitude, lon: longitude };
       setCoords(next);
       setLiveCoords(next);
-
+      
       // 주소 및 행정구역 역변환 (병렬 처리)
       try {
         const [addressResult, regionResult] = await Promise.allSettled([coordToAddress(latitude, longitude), coordToRegion(latitude, longitude)]);
-
+        
         // 주소 설정
         if (addressResult.status === "fulfilled" && addressResult.value) {
           console.log("주소 변환 성공:", addressResult.value);
@@ -243,17 +294,17 @@ export const SafeBridgeApp: React.FC = () => {
           // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 주소를 찾지 못한 경우)
           if (addressResult.status === "rejected") {
             const error = addressResult.reason;
-            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-            console.warn("주소 변환 실패:", errorMsg);
-            
+          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+          console.warn("주소 변환 실패:", errorMsg);
+          
             // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
             if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
-              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
-            }
+            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+          }
           }
           // fulfilled이지만 value가 null인 경우는 조용히 처리 (카카오 API가 주소를 찾지 못한 정상적인 경우)
         }
-
+        
         // 행정구역 설정
         if (regionResult.status === "fulfilled" && regionResult.value) {
           console.log("행정구역 변환 성공:", regionResult.value);
@@ -262,12 +313,12 @@ export const SafeBridgeApp: React.FC = () => {
           // rejected가 아니고 value가 null인 경우는 정상 (카카오 API가 행정구역을 찾지 못한 경우)
           if (regionResult.status === "rejected") {
             const error = regionResult.reason;
-            const errorMsg = error?.message || (error ? String(error) : "결과 없음");
-            console.warn("행정구역 변환 실패:", errorMsg);
-            
+          const errorMsg = error?.message || (error ? String(error) : "결과 없음");
+          console.warn("행정구역 변환 실패:", errorMsg);
+          
             // 실제 네트워크 오류나 서버 연결 실패 시에만 경고
             if (error && (error?.code === 'ERR_NETWORK' || error?.message?.includes('CORS') || error?.code === 'ECONNREFUSED' || error?.response?.status === 404)) {
-              console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
+            console.warn("백엔드 API 서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
             }
           }
           // fulfilled이지만 value가 null인 경우는 조용히 처리
@@ -298,8 +349,27 @@ export const SafeBridgeApp: React.FC = () => {
       }
     } catch (err: any) {
       console.error("GPS 위치 정보 오류:", err);
+      
+      // HTTP 환경 체크
+      const hostname = window.location.hostname;
+      const protocol = window.location.protocol;
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+      const isLocalDomain = hostname.endsWith('.local'); // mDNS/Bonjour 도메인 지원
+      const isHttpNotLocalhost = protocol === 'http:' && !isLocalhost && !isLocalDomain;
+      
       if (err.code === 1) {
+        // 위치 권한 거부
+        if (isHttpNotLocalhost) {
+          alert(
+            "HTTP 환경에서는 위치 권한을 사용할 수 없습니다.\n\n" +
+            "Safari 브라우저는 보안상의 이유로 HTTP 사이트에서 위치 정보 접근을 허용하지 않습니다.\n\n" +
+            "해결 방법:\n" +
+            "1. HTTPS 환경(ngrok URL)을 사용하거나\n" +
+            "2. 주소 입력란에 직접 주소를 입력해주세요."
+          );
+        } else {
         alert("위치 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해주세요.");
+        }
       } else if (err.code === 2) {
         alert("위치를 확인할 수 없습니다. GPS 신호를 확인해주세요.");
       } else if (err.code === 3) {
@@ -317,10 +387,10 @@ export const SafeBridgeApp: React.FC = () => {
       alert("주소를 입력해주세요.");
       return;
     }
-
+    
     // 주소 검색 중 표시를 위한 상태 (선택사항)
     const originalAddress = address;
-
+    
     try {
       const result = await addressToCoord(address);
       if (result) {
@@ -343,7 +413,7 @@ export const SafeBridgeApp: React.FC = () => {
     } catch (error: any) {
       console.error("주소 검색 오류:", error);
       const errorMsg = error.message || "주소 → 좌표 변환에 실패했습니다.";
-
+      
       // 더 친절한 에러 메시지
       if (errorMsg.includes("찾을 수 없습니다")) {
         alert(
@@ -415,12 +485,12 @@ export const SafeBridgeApp: React.FC = () => {
       alert("위치를 먼저 설정해주세요.");
       return;
     }
-
+    
     if (!region) {
       alert("행정구역을 확인할 수 없습니다. GPS 버튼을 다시 눌러주거나 주소를 검색해주세요.");
       return;
     }
-
+    
     try {
       setShowHospitalPanel(true);
       setLoadingHospitals(true);
@@ -429,7 +499,7 @@ export const SafeBridgeApp: React.FC = () => {
       setRejectedHospitals(new Set());
       // 채팅이 열려있지 않을 때만 approvedHospital 초기화 (채팅 중이면 유지)
       if (!isChatOpen) {
-        setApprovedHospital(null);
+      setApprovedHospital(null);
       }
       setRoutePaths({});
       setBackupHospitals([]);
@@ -439,7 +509,7 @@ export const SafeBridgeApp: React.FC = () => {
       setCurrentHospitalIndex(0);
       setActiveCalls({});
       colorMapRef.current = {};
-
+      
       // 증상에 따라 자동으로 병원 타입 결정
       // 다발성 외상/중증 외상 → 외상센터 우선, 그 외 → 일반 (백엔드에서 자동 처리)
       const result = await searchHospitals(coords.lat, coords.lon, region.sido, region.sigungu, symptom, sttText || null);
@@ -460,14 +530,14 @@ export const SafeBridgeApp: React.FC = () => {
         const firstIndex = self.findIndex((item) => item.hpid === h.hpid);
         return firstIndex === idx;
       });
-
+      
       setHospitals(uniqueHospitals);
       setBackupHospitals(uniqueBackup);
       setNeighborHospitals(uniqueNeighbor);
       if (!fetchedHospitals.length) {
         setHasExhaustedHospitals(true);
       }
-
+      
       if (result.route_paths) {
         setRoutePaths(result.route_paths);
       }
@@ -527,9 +597,18 @@ export const SafeBridgeApp: React.FC = () => {
   };
 
   const fetchRoutePaths = useCallback(
-    async (targetHospitals: Hospital[], options?: { append?: boolean; updateDistances?: boolean; updateBackup?: boolean; updateNeighbor?: boolean }) => {
+    async (
+      targetHospitals: Hospital[],
+      options?: {
+        append?: boolean;
+        updateDistances?: boolean;
+        updateBackup?: boolean;
+        updateNeighbor?: boolean;
+        updateApproved?: boolean;
+      }
+    ) => {
       if (!coords.lat || !coords.lon || !targetHospitals?.length) return;
-
+      
       const paths: Record<string, number[][]> = {};
       const meta: Record<string, { distance_km?: number; eta_minutes?: number }> = {};
       for (const hospital of targetHospitals) {
@@ -596,6 +675,18 @@ export const SafeBridgeApp: React.FC = () => {
           })
         );
       }
+      if (options?.updateApproved && Object.keys(meta).length > 0) {
+        setApprovedHospital((prev) => {
+          if (!prev || !prev.hpid) return prev;
+          const key = prev.hpid;
+          if (!meta[key]) return prev;
+          return {
+            ...prev,
+            distance_km: meta[key].distance_km ?? prev.distance_km,
+            eta_minutes: meta[key].eta_minutes ?? prev.eta_minutes,
+          };
+        });
+      }
     },
     [coords.lat, coords.lon]
   );
@@ -603,7 +694,11 @@ export const SafeBridgeApp: React.FC = () => {
   useEffect(() => {
     if (!approvedHospital || !approvedHospital.hpid) return;
     if (routePaths[approvedHospital.hpid]) return;
-    fetchRoutePaths([approvedHospital], { append: true, updateDistances: true });
+    fetchRoutePaths([approvedHospital], {
+      append: true,
+      updateDistances: true,
+      updateApproved: true,
+    });
   }, [approvedHospital, routePaths, fetchRoutePaths]);
 
   const handleAudioFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -662,7 +757,7 @@ export const SafeBridgeApp: React.FC = () => {
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/wav" });
         const audioFile = new File([audioBlob], "recording.wav", { type: "audio/wav" });
-
+        
         // 녹음된 파일을 업로드
         try {
           const result = await transcribeAudio(audioFile);
@@ -679,7 +774,7 @@ export const SafeBridgeApp: React.FC = () => {
           console.error("음성 인식 오류:", error);
           alert(error.message || "음성 인식 중 오류가 발생했습니다.");
         }
-
+        
         // 스트림 정리
         stream.getTracks().forEach((track) => track.stop());
         cleanupAudioVisualization();
@@ -773,7 +868,7 @@ export const SafeBridgeApp: React.FC = () => {
     // DB에 RequestAssignment 생성 및 승인 상태 업데이트
     if (!hospital.hpid) {
       console.warn("hospital.hpid가 없어 병원 승인을 처리할 수 없습니다.");
-      handleOpenChat(hospital);
+    handleOpenChat(hospital);
       return;
     }
 
@@ -925,6 +1020,21 @@ export const SafeBridgeApp: React.FC = () => {
         assignmentId: finalAssignmentId,
       });
 
+      // 재접속한 경우에도 지도 경로/ETA가 보이도록 승인 병원 및 경로 정보 갱신
+      if (hospital.wgs84Lat && hospital.wgs84Lon) {
+        setApprovedHospital(hospital);
+        try {
+          // 현재 위치와 병원 좌표를 기반으로 경로/ETA 재계산
+          fetchRoutePaths([hospital], {
+            append: true,
+            updateDistances: true,
+            updateApproved: true,
+          });
+        } catch (e) {
+          console.warn("재접속 세션 경로 계산 중 오류:", e);
+        }
+      }
+
       setChatSession({
         id: sessionId,
         hospitalName: hospital.dutyName,
@@ -1001,23 +1111,25 @@ export const SafeBridgeApp: React.FC = () => {
   }, [hospitals]);
 
   const FALLBACK_TWILIO_NUMBER = "010-4932-3766";
+  // ARS용 환자 정보: 사용자가 선택한 STT 원문 또는 SBAR 텍스트만 사용
+  // - Pre-KTAS 표기는 음성에서 자연스럽게 읽히도록 "프리케이타스"로 변환
   const buildPatientInfo = () => {
-    const preset = CRITICAL_PRESETS.find((p) => p.label === symptom);
-    const pieces: string[] = [];
-    const condition = symptom || "환자";
-    const preKtas = preset?.preKtasLevel ? `${preset.preKtasLevel}` : "Pre-KTAS 정보 미확인";
-    const ageText = patientAgeBand || "";
-    const sexText = patientSex === "male" ? "남성" : patientSex === "female" ? "여성" : "";
-    const conditionPart = preKtas ? `${condition}(으)로 인한 ${preKtas}` : `${condition} 상태`;
-    pieces.push(`현재 ${conditionPart}`.trim());
-    if (ageText) pieces.push(ageText);
-    if (sexText) pieces.push(sexText);
-    const arsDetail = arsSource === "stt" ? sttText?.trim() : arsSource === "sbar" ? sbarText?.trim() : "";
-    if (arsDetail) {
-      pieces.push(arsSource === "sbar" ? `SBAR 요약: ${arsDetail}` : `STT 원문: ${arsDetail}`);
+    const normalizePreKtas = (text: string) =>
+      text.replace(/Pre[-\s]?KTAS/gi, "프리케이타스");
+
+    const stt = sttText?.trim() || "";
+    const sbar = sbarText?.trim() || "";
+
+    if (arsSource === "sbar" && sbar) {
+      return normalizePreKtas(sbar);
     }
-    pieces.push("수용 요청드립니다.");
-    return pieces.filter(Boolean).join(" ");
+    if (arsSource === "stt" && stt) {
+      return normalizePreKtas(stt);
+    }
+    // 소스가 지정되지 않았거나 비어 있으면, STT 원문이 있으면 사용
+    if (stt) return normalizePreKtas(stt);
+    // 둘 다 없으면 빈 문자열 반환 (백엔드에서 기본 멘트 처리)
+    return "";
   };
 
   // [실제 Twilio 전화 기능 - 필요시 주석 해제하여 사용]
@@ -1057,11 +1169,18 @@ export const SafeBridgeApp: React.FC = () => {
         if (callTimeoutsRef.current[timeoutKey]) {
           clearTimeout(callTimeoutsRef.current[timeoutKey]);
         }
-        // 전화 타임아웃: 60초 후에 거절 처리 (전화 연결 및 ARS 안내 시간 고려)
+        // 전화 타임아웃: ARS 메시지 길이에 따라 동적으로 설정 (최소 90초, 최대 180초)
+        // ARS 메시지가 길 경우를 대비해 충분한 시간 제공
+        // 한글 기준 대략 1초에 3-4자 재생, ARS 재생 시간 + 사용자 입력 대기 시간 고려
+        const patientInfoText = buildPatientInfo() || sttText || "";
+        const estimatedArsSeconds = Math.max(30, Math.min(90, Math.ceil(patientInfoText.length / 3))); // ARS 재생 예상 시간 (초)
+        const totalTimeoutSeconds = Math.max(90, Math.min(180, estimatedArsSeconds + 60)); // ARS 재생 + 입력 대기 (최소 90초, 최대 180초)
+        const totalTimeoutMs = totalTimeoutSeconds * 1000;
+        console.log(`⏱️ 전화 타임아웃 설정: ${totalTimeoutSeconds}초 (ARS 메시지 길이: ${patientInfoText.length}자, 예상 재생: ${estimatedArsSeconds}초)`);
         callTimeoutsRef.current[timeoutKey] = setTimeout(() => {
           console.log(`⏱️ 전화 타임아웃: ${hospital.dutyName} (${timeoutKey})`);
           completeCallAndMoveNext(hospital, "rejected");
-        }, 60000); // 60초로 증가
+        }, totalTimeoutMs);
       }
     } catch (error: any) {
       console.error("전화 연결 오류:", error);
@@ -1147,9 +1266,15 @@ export const SafeBridgeApp: React.FC = () => {
     }
 
     let timer: ReturnType<typeof setTimeout> | null = null;
-    timer = setTimeout(() => {
-      handleStartTwilioCall(currentHospital);
-    }, 10000); // 10초 딜레이
+    // 첫 번째 병원은 바로 발신, 이후 병원들은 약간의 간격(10초) 후 자동 발신
+    const delayMs = currentHospitalIndex === 0 ? 0 : 10000;
+    if (delayMs === 0) {
+      void handleStartTwilioCall(currentHospital);
+    } else {
+      timer = setTimeout(() => {
+        handleStartTwilioCall(currentHospital);
+      }, delayMs);
+    }
     
     return () => {
       if (timer) clearTimeout(timer);
@@ -1271,7 +1396,23 @@ export const SafeBridgeApp: React.FC = () => {
   };
 
   useEffect(() => {
+    // ✅ HTTP 환경에서는 자동 위치 추적 비활성화 (위치 권한 팝업 반복 방지)
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+    const isLocalDomain = hostname.endsWith('.local'); // mDNS/Bonjour 도메인 지원
+    const isSecure = protocol === 'https:';
+    
+    // HTTPS, localhost, 또는 .local 도메인이 아니면 자동 실행하지 않음
+    // (예: http://10.50.1.62:5173 같은 로컬 IP 접속은 자동 실행 안 함)
+    // .local 도메인은 Safari에서 일부 secure context로 인식될 수 있음
+    if (!isSecure && !isLocalhost && !isLocalDomain) {
+      console.log("HTTP 환경에서는 자동 위치 추적이 비활성화됩니다. GPS 버튼을 클릭하여 위치를 가져오세요.");
+      return;
+    }
+    
     if (!navigator.geolocation) return;
+    
     const id = navigator.geolocation.watchPosition(
       async (pos) => {
         const next = { lat: pos.coords.latitude, lon: pos.coords.longitude };
@@ -1279,7 +1420,13 @@ export const SafeBridgeApp: React.FC = () => {
         setCoords(next); // 버튼/검색에서 쓰는 coords도 같이 업데이트
         if (!region) await applyRegionFromCoords(next.lat!, next.lon!);
       },
-      () => {},
+      (error) => {
+        // 권한 거부 시 자동 실행 중단하여 팝업 반복 방지
+        if (error.code === 1) {
+          console.warn("위치 권한이 거부되었습니다. 자동 위치 추적을 중단합니다.");
+          navigator.geolocation.clearWatch(id);
+        }
+      },
       { enableHighAccuracy: true, maximumAge: 5000 }
     );
     return () => navigator.geolocation.clearWatch(id);
@@ -1290,12 +1437,31 @@ export const SafeBridgeApp: React.FC = () => {
   return (
     <div className="relative min-h-screen bg-slate-100 text-slate-900">
       <header className="border-b border-slate-200 bg-white px-4 md:px-5 py-3 shadow-sm">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div>
             <h1 className="text-lg md:text-xl font-semibold tracking-tight text-slate-900">SAFE BRIDGE · 응급 이송 지원</h1>
-            <p className="text-[11px] md:text-xs text-slate-500 mt-1">Pre-KTAS 기반 환자 상태 요약과 인근 응급의료기관 추천을 위한 태블릿 전용 화면입니다.</p>
+            <p className="text-[11px] md:text-xs text-slate-500 mt-1">
+              Pre-KTAS 기반 환자 상태 요약과 인근 응급의료기관 추천을 위한 태블릿 전용 화면입니다.
+            </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {pendingChatSession && pendingChatSession.hospital && (
+              <button
+                type="button"
+                onClick={() =>
+                  handleOpenChat(
+                    pendingChatSession.hospital as Hospital,
+                    pendingChatSession.session_id,
+                    pendingChatSession.request_id,
+                    pendingChatSession.assignment_id
+                  )
+                }
+                className="px-3 py-1 rounded-full bg-amber-100 text-[11px] text-amber-800 border border-amber-300 hover:bg-amber-200 whitespace-nowrap"
+              >
+                현재 환자인계가 정상적으로 종료되지 않은 채팅방이 존재합니다.{" "}
+                <span className="underline font-semibold">바로가기</span>
+              </button>
+            )}
             {currentUser && (
               <div className="text-right text-[10px] md:text-[11px] text-slate-600">
                 <div className="font-semibold">{currentUser.ems_id}</div>
@@ -1387,48 +1553,48 @@ export const SafeBridgeApp: React.FC = () => {
 
         {/* 우측: 근처 응급의료기관 리스트 */}
         {showHospitalPanel && (
-          <section className="bg-white rounded-xl shadow-sm p-3 md:p-4 border border-slate-200 flex flex-col">
-            <div className="flex items-center justify-between mb-2 md:mb-3">
-              <div>
-                <h2 className="text-sm md:text-base font-semibold">근처 응급의료기관 현황</h2>
+        <section className="bg-white rounded-xl shadow-sm p-3 md:p-4 border border-slate-200 flex flex-col">
+          <div className="flex items-center justify-between mb-2 md:mb-3">
+            <div>
+              <h2 className="text-sm md:text-base font-semibold">근처 응급의료기관 현황</h2>
                 <p className="text-[10px] md:text-[11px] text-slate-500 mt-0.5">실제 서비스에서는 실시간 수용 가능 여부와 거리, 장비 여건 등을 함께 반영합니다.</p>
-              </div>
-              <div className="flex flex-col items-end gap-1">
-                <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2.5 py-1 text-[10px] md:text-[11px] text-slate-700">
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2.5 py-1 text-[10px] md:text-[11px] text-slate-700">
                   우선조건: {priorityModes.map((m) => (m === "distance" ? "거리 우선" : m === "beds" ? "병상 여유 우선" : "장비·전담팀 우선")).join(" + ") || "거리 우선"}
-                </span>
-                <span className="text-[10px] md:text-[11px] text-slate-400">(목업 화면으로, 실제 알고리즘 연동 전 단계입니다.)</span>
+              </span>
+              <span className="text-[10px] md:text-[11px] text-slate-400">(목업 화면으로, 실제 알고리즘 연동 전 단계입니다.)</span>
+            </div>
+          </div>
+            {!hospitals.length && <p className="text-xs md:text-sm text-slate-500">표시할 병원 정보가 없습니다.</p>}
+          {!!hospitals.length && (
+            <div className="mt-1 md:mt-3 overflow-hidden">
+              <div className="flex overflow-x-auto snap-x snap-mandatory gap-5 pb-4 pr-4">
+                {hospitals.map((h, idx) => (
+                    <div key={h.hpid || idx} className="snap-center shrink-0 w-[calc(100vw-3rem)] md:w-[580px]">
+                    <HospitalCard
+                      hospital={h}
+                      index={idx}
+                      region={region}
+                      approvalStatus={hospitalApprovalStatus[h.hpid || ""] || "pending"}
+                      isRejected={rejectedHospitals.has(h.hpid || "")}
+                      isActiveCandidate={!approvedHospital && idx === currentHospitalIndex}
+                      canInteract={!approvedHospital}
+                      onApprove={handleApproveHospital}
+                      onReject={handleRejectHospital}
+                      onStartCall={handleStartTwilioCall}
+                      onOpenChat={handleOpenChat}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
-            {!hospitals.length && <p className="text-xs md:text-sm text-slate-500">표시할 병원 정보가 없습니다.</p>}
-            {!!hospitals.length && (
-              <div className="mt-1 md:mt-3 overflow-hidden">
-                <div className="flex overflow-x-auto snap-x snap-mandatory gap-5 pb-4 pr-4">
-                  {hospitals.map((h, idx) => (
-                    <div key={h.hpid || idx} className="snap-center shrink-0 w-[calc(100vw-3rem)] md:w-[580px]">
-                      <HospitalCard
-                        hospital={h}
-                        index={idx}
-                        region={region}
-                        approvalStatus={hospitalApprovalStatus[h.hpid || ""] || "pending"}
-                        isRejected={rejectedHospitals.has(h.hpid || "")}
-                        isActiveCandidate={!approvedHospital && idx === currentHospitalIndex}
-                        canInteract={!approvedHospital}
-                        onApprove={handleApproveHospital}
-                        onReject={handleRejectHospital}
-                        onStartCall={handleStartTwilioCall}
-                        onOpenChat={handleOpenChat}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
+          )}
+        </section>
         )}
-
+        
         {approvedHospital && <ApprovedHospitalInfo approvedHospital={approvedHospital} />}
-
+        
         {!approvedHospital && coords.lat && coords.lon && displayedMapHospitals.length > 0 && (
           <MapDisplay coords={coords} hospitals={displayedMapHospitals} routePaths={routePaths} approvedHospital={approvedHospital} resolveHospitalColor={resolveHospitalColor} />
         )}
@@ -1440,28 +1606,70 @@ export const SafeBridgeApp: React.FC = () => {
         <ParamedicChatSlideOver
           isOpen={isChatOpen}
           session={chatSession}
-          hospital={approvedHospital || (chatSession.hospitalName ? {
-            hpid: chatSession.requestId?.toString() || "",
-            dutyName: chatSession.hospitalName || "병원",
-            dutyEmclsName: chatSession.regionLabel || "응급의료기관",
-            dutyDivNam: chatSession.regionLabel || "응급의료기관",
-            wgs84Lat: undefined,
-            wgs84Lon: undefined,
-          } as Hospital : null!)}
+          hospital={
+            approvedHospital ||
+            (chatSession.hospitalName
+              ? ({
+                  hpid: chatSession.requestId?.toString() || "",
+                  dutyName: chatSession.hospitalName || "병원",
+                  dutyEmclsName: chatSession.regionLabel || "응급의료기관",
+                  dutyDivNam: chatSession.regionLabel || "응급의료기관",
+                  wgs84Lat: undefined,
+                  wgs84Lon: undefined,
+                } as Hospital)
+              : null!)
+          }
           patientMeta={{
             sessionId: chatSession.id,
-            patientAge: extractPatientAge(sttText),
-            patientSex: extractPatientSex(sttText),
-            preKtasLevel: extractPreKtasLevel(sttText),
-            chiefComplaint: symptom,
-            vitalsSummary: sttText ? sttText.substring(0, 200) : undefined,
-            etaMinutes: approvedHospital?.eta_minutes,
-            distanceKm:
-              approvedHospital && typeof approvedHospital.distance_km === "number"
-                ? approvedHospital.distance_km
-                : approvedHospital && typeof approvedHospital.distance_km === "string"
-                ? parseFloat(approvedHospital.distance_km)
+            patientAge:
+              extractPatientAge(sttText) ??
+              (pendingChatSession &&
+              pendingChatSession.session_id === chatSession.sessionId
+                ? pendingChatSession.patient_age ?? undefined
+                : undefined),
+            patientSex:
+              extractPatientSex(sttText) ??
+              (pendingChatSession &&
+              pendingChatSession.session_id === chatSession.sessionId
+                ? (pendingChatSession.patient_sex as "M" | "F" | null) ?? undefined
+                : undefined),
+            preKtasLevel:
+              extractPreKtasLevel(sttText) ??
+              (pendingChatSession &&
+              pendingChatSession.session_id === chatSession.sessionId
+                ? (typeof pendingChatSession.pre_ktas_class === "string"
+                    ? parseInt(pendingChatSession.pre_ktas_class, 10)
+                    : pendingChatSession.pre_ktas_class ?? undefined)
+                : undefined),
+            chiefComplaint:
+              symptom ||
+              (pendingChatSession &&
+              pendingChatSession.session_id === chatSession.sessionId
+                ? pendingChatSession.rag_summary ?? undefined
+                : undefined),
+            vitalsSummary:
+              sttText && sttText.trim()
+                ? sttText.substring(0, 200)
+                : pendingChatSession &&
+                  pendingChatSession.session_id === chatSession.sessionId &&
+                  pendingChatSession.stt_full_text
+                ? pendingChatSession.stt_full_text.substring(0, 200)
                 : undefined,
+            etaMinutes: (() => {
+              if (!approvedHospital) return undefined;
+              const matched =
+                hospitals.find((h) => h.hpid === approvedHospital.hpid) || approvedHospital;
+              return matched?.eta_minutes;
+            })(),
+            distanceKm: (() => {
+              if (!approvedHospital) return undefined;
+              const matched =
+                hospitals.find((h) => h.hpid === approvedHospital.hpid) || approvedHospital;
+              if (typeof matched?.distance_km === "number") return matched.distance_km;
+              if (typeof matched?.distance_km === "string")
+                return parseFloat(matched.distance_km);
+              return undefined;
+            })(),
             lastUpdated: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }),
           }}
           sttText={sttText}

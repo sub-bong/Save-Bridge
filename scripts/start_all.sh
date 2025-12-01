@@ -186,6 +186,46 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
+# mkcert 설치 확인 및 SSL 인증서 생성 (HTTPS용)
+echo ""
+echo " mkcert SSL 인증서 확인 중..."
+if command -v mkcert &> /dev/null; then
+    CERT_DIR="$PROJECT_ROOT/$REACT_DIR"
+    CERT_KEY="$CERT_DIR/localhost+3-key.pem"
+    CERT_FILE="$CERT_DIR/localhost+3.pem"
+    
+    # 인증서 파일이 없으면 생성
+    if [ ! -f "$CERT_KEY" ] || [ ! -f "$CERT_FILE" ]; then
+        echo "    SSL 인증서 생성 중..."
+        cd "$CERT_DIR"
+        
+        # 로컬 CA 설치 (한 번만 필요, 에러 무시)
+        mkcert -install 2>/dev/null || echo "    CA 인증서는 이미 설치되어 있거나 수동 설치가 필요합니다."
+        
+        # 인증서 생성 (localhost, 127.0.0.1, 로컬 IP, IPv6)
+        LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
+        if [ -n "$LOCAL_IP" ]; then
+            mkcert localhost 127.0.0.1 "$LOCAL_IP" ::1 > /dev/null 2>&1
+        else
+            mkcert localhost 127.0.0.1 ::1 > /dev/null 2>&1
+        fi
+        
+        if [ -f "$CERT_KEY" ] && [ -f "$CERT_FILE" ]; then
+            echo "    ✅ SSL 인증서 생성 완료"
+            echo "    인증서 파일: $CERT_FILE"
+        else
+            echo "    ⚠️  SSL 인증서 생성 실패 (HTTPS 미사용, HTTP로 실행)"
+        fi
+    else
+        echo "    ✅ SSL 인증서 이미 존재"
+    fi
+    cd "$PROJECT_ROOT"
+else
+    echo "    ⚠️  mkcert가 설치되어 있지 않습니다."
+    echo "    설치 방법: brew install mkcert"
+    echo "    (HTTPS 없이 HTTP로 실행됩니다)"
+fi
+
 # React 앱 의존성 확인 및 설치
 echo ""
 echo "  React 앱 준비 중..."
@@ -204,20 +244,39 @@ if [ ! -d "node_modules" ]; then
     fi
 fi
 
-# React 앱 백그라운드 실행
+# React 앱 백그라운드 실행 (모바일 카메라 접근을 위한 환경 변수 설정)
 echo "React 앱 시작 (포트 5173)..."
 cd "$PROJECT_ROOT/$REACT_DIR"
+
+# Mac 호스트명 확인 (.local 도메인용)
+MAC_HOSTNAME=$(hostname 2>/dev/null || scutil --get ComputerName 2>/dev/null || echo "MacBook-Pro.local")
+MAC_HOSTNAME_LOCAL="${MAC_HOSTNAME%.local}.local"
+
+# 모바일 카메라 접근을 위한 환경 변수 설정
+# Vite는 host, port를 config에서 설정하므로 환경 변수는 참고용
+export HOST=0.0.0.0
+export PORT=5173
+export VITE_WDS_SOCKET_HOST="$MAC_HOSTNAME_LOCAL"
+
+# React 앱 실행 (환경 변수와 함께)
 nohup npm run dev > ../logs/react_app.log 2>&1 &
 REACT_PID=$!
 echo "    React PID: $REACT_PID"
+echo "    모바일 접속 URL: http://$MAC_HOSTNAME_LOCAL:5173"
 
 # React 앱 준비 대기
 sleep 5
 
-# React 앱 확인
-if curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
+# React 앱 확인 (HTTPS 우선, 없으면 HTTP)
+REACT_PORT="5173"
+REACT_PROTOCOL="http"
+if curl -s -k https://localhost:5173 > /dev/null 2>&1; then
+    REACT_PROTOCOL="https"
+    echo "    React 앱 정상 실행 중 (HTTPS)"
+    echo "    React URL: https://localhost:$REACT_PORT"
+elif curl -s http://localhost:5173 > /dev/null 2>&1 || curl -s http://localhost:5174 > /dev/null 2>&1; then
     REACT_PORT=$(curl -s http://localhost:5173 > /dev/null 2>&1 && echo "5173" || echo "5174")
-    echo "    React 앱 정상 실행 중"
+    echo "    React 앱 정상 실행 중 (HTTP)"
     echo "    React URL: http://localhost:$REACT_PORT"
 else
     echo "     React 앱 시작 확인 중... (로그 확인: tail -f logs/react_app.log)"
@@ -243,7 +302,17 @@ echo "   - /api/geo/coord2region"
 echo "   - /api/geo/address2coord"
 echo ""
 echo " React 앱 (프론트엔드):"
-echo "   http://localhost:$REACT_PORT"
+if [ "$REACT_PROTOCOL" = "https" ]; then
+    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "10.50.1.62")
+    MAC_HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "MacBook-Pro.local")
+    echo "   https://localhost:$REACT_PORT (로컬)"
+    echo "   https://$LOCAL_IP:$REACT_PORT (네트워크 IP)"
+    echo "   http://$MAC_HOSTNAME_LOCAL:$REACT_PORT (모바일 카메라 접근용 .local 도메인)"
+else
+    MAC_HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "MacBook-Pro.local")
+    echo "   http://localhost:$REACT_PORT"
+    echo "   http://$MAC_HOSTNAME_LOCAL:$REACT_PORT (모바일 카메라 접근용 .local 도메인)"
+fi
 echo ""
 if [ "$NGROK_URL" != "(미사용)" ]; then
     echo " ngrok 터널 (Twilio 콜백용):"
